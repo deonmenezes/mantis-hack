@@ -1,0 +1,17 @@
+[package]
+name = "mantis-crawler-dynamic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Headless-Chromium dynamic JS crawl: renders the page, then runs the static extractor over the result (PRD §5.3.5)."
+
+[dependencies]
+mantis-crawler = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

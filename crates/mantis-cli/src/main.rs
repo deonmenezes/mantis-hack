@@ -57,6 +57,31 @@ enum Command {
     },
     /// Export an engagement's event log as JSONL (M0.5).
     Export { id: String },
+    /// Probe a configured LLM provider with a 1-token round-trip.
+    /// Used to validate API key + network reachability without
+    /// spending tokens on a real synthesis call.
+    Llm {
+        #[command(subcommand)]
+        action: LlmAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum LlmAction {
+    /// One-shot health check against a provider. The API key comes
+    /// from the environment variable named after the provider
+    /// (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`).
+    Probe {
+        /// Provider: `anthropic` or `openai`.
+        #[arg(long, default_value = "anthropic")]
+        provider: String,
+        /// Override the model (defaults to each adapter's default).
+        #[arg(long)]
+        model: Option<String>,
+        /// Prompt to send. Default is a trivial liveness ping.
+        #[arg(long, default_value = "Reply with exactly the word: ok")]
+        prompt: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -175,6 +200,48 @@ fn main() -> Result<()> {
             output: None,
             daemon: DEFAULT_DAEMON_ENDPOINT.to_owned(),
         })),
+        Command::Llm { action } => run_async(handle_llm(action)),
+    }
+}
+
+async fn handle_llm(action: LlmAction) -> Result<()> {
+    use mantis_synthesizer::{anthropic::AnthropicAdapter, openai::OpenAIAdapter, LlmAdapter};
+    match action {
+        LlmAction::Probe {
+            provider,
+            model,
+            prompt,
+        } => {
+            let result = match provider.as_str() {
+                "anthropic" => {
+                    let key = std::env::var("ANTHROPIC_API_KEY").context(
+                        "ANTHROPIC_API_KEY is not set; export it and rerun `mantis llm probe`",
+                    )?;
+                    let mut adapter = AnthropicAdapter::new(key).with_max_tokens(16);
+                    if let Some(m) = model {
+                        adapter = adapter.with_model(m);
+                    }
+                    adapter.complete(&prompt).await
+                }
+                "openai" => {
+                    let key = std::env::var("OPENAI_API_KEY")
+                        .context("OPENAI_API_KEY is not set; export it and rerun")?;
+                    let mut adapter = OpenAIAdapter::new(key).with_max_tokens(16);
+                    if let Some(m) = model {
+                        adapter = adapter.with_model(m);
+                    }
+                    adapter.complete(&prompt).await
+                }
+                other => anyhow::bail!("unknown provider `{other}`; supported: anthropic, openai"),
+            };
+            match result {
+                Ok(text) => {
+                    println!("[mantis llm probe ok] provider={provider} reply={text:?}");
+                    Ok(())
+                }
+                Err(e) => anyhow::bail!("provider call failed: {e}"),
+            }
+        }
     }
 }
 

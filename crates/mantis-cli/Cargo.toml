@@ -16,6 +16,7 @@ path = "src/main.rs"
 mantis-core = { workspace = true }
 mantis-daemon = { workspace = true }
 mantis-proto = { workspace = true }
+mantis-synthesizer = { workspace = true }
 mantis-workspace = { workspace = true }
 
 anyhow = { workspace = true }

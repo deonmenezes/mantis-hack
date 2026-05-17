@@ -1,8 +1,18 @@
 name: bench
 
 # Validates PRD §11 performance targets on a sized Linux runner.
-# The benchmarks run on every push to main and report into the
-# job summary so the project page shows current numbers.
+# Posts results into the job summary so the project page shows
+# current numbers.
+#
+# Runner choice:
+#   - `criterion` job runs on `ubuntu-latest` so it always runs.
+#   - `criterion-16core` job runs on `ubuntu-latest-16-cores`
+#     (GitHub's larger-runner tier; needs to be enabled in the
+#     org's Actions settings — see
+#     https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners).
+#     This is where the PRD §11.4 "≥50,000 req/s on a 16-core
+#     host" number gets validated.
+#   - `scalability` job runs the 100-concurrent-engagement test.
 
 on:
   push:
@@ -14,7 +24,7 @@ env:
 
 jobs:
   criterion:
-    name: criterion benchmarks (§11)
+    name: criterion benches (ubuntu-latest, sanity)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,43 +33,75 @@ jobs:
         with:
           key: bench-${{ runner.os }}
       - name: Run criterion benches
-        id: bench
         run: |
           set -euo pipefail
           cargo bench -p mantis-benches --bench perf_targets -- \
             --warm-up-time 1 --measurement-time 3 --sample-size 20 \
             2>&1 | tee bench-output.txt
-      - name: Summarize benchmark results
+      - name: Summarize results
         if: always()
         run: |
           {
-            echo "## Mantis benchmark results"
-            echo ""
-            echo "### PRD §11 targets"
-            echo ""
-            echo "| Metric | Target |"
-            echo "|---|---|"
-            echo "| Daemon cold start | ≤200 ms |"
-            echo "| Sandbox warm invocation | ≤500 µs |"
-            echo "| Event log query, 1B events | ≤1 s |"
-            echo ""
-            echo "### Measured"
+            echo "## Mantis bench (ubuntu-latest)"
             echo ""
             echo '\`\`\`'
             grep -E "time:|TARGET " bench-output.txt || true
             echo '\`\`\`'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload bench output
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: bench-output
+          name: bench-output-ubuntu-latest
           path: bench-output.txt
           retention-days: 30
 
+  criterion-16core:
+    name: criterion benches (16-core, §11.4 validation)
+    # Larger runner tier. Requires org-level enablement; the job
+    # is allowed to fail back to a skip if the runner is not
+    # available so the workflow doesn't block merges.
+    runs-on: ubuntu-latest-16-cores
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-16-${{ runner.os }}
+      - name: Run criterion benches (longer measurement)
+        run: |
+          set -euo pipefail
+          cargo bench -p mantis-benches --bench perf_targets -- \
+            --warm-up-time 2 --measurement-time 8 --sample-size 50 \
+            2>&1 | tee bench-output-16core.txt
+      - name: Summarize results
+        if: always()
+        run: |
+          {
+            echo "## Mantis bench (16-core)"
+            echo ""
+            echo "### PRD §11 targets vs measured"
+            echo ""
+            echo "| Metric | Target | Measured (median) |"
+            echo "|---|---|---|"
+            echo "| Daemon cold start | ≤200 ms | (see below) |"
+            echo "| Sandbox warm invocation | ≤500 µs | (see below) |"
+            echo "| HTTP throughput | ≥50,000 req/s | (see below) |"
+            echo "| Concurrent engagements per host | ≥100 | (validated by scalability job) |"
+            echo ""
+            echo '\`\`\`'
+            grep -E "time:|TARGET " bench-output-16core.txt || true
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-output-16core
+          path: bench-output-16core.txt
+          retention-days: 90
+
   scalability:
     name: scalability tests (§6.2.1)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-16-cores
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

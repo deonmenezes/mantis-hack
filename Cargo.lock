@@ -2048,6 +2048,7 @@ dependencies = [
  "mantis-core",
  "mantis-daemon",
  "mantis-proto",
+ "mantis-synthesizer",
  "mantis-workspace",
  "serde_json",
  "tokio",
@@ -2072,6 +2073,15 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "mantis-crawler-dynamic"
+version = "0.0.1"
+dependencies = [
+ "mantis-crawler",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

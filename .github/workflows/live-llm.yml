@@ -1,0 +1,76 @@
+name: live-llm
+
+# Live LLM probe — runs only when the relevant API key secret is
+# configured on the repo. Validates that AnthropicAdapter and
+# OpenAIAdapter actually round-trip against the real provider API,
+# closing the "wire-correct against mocks but never tested against
+# production" gap from the PRD audit.
+#
+# To enable:
+#   Repository Settings → Secrets → Actions
+#     ANTHROPIC_API_KEY = sk-ant-...
+#     OPENAI_API_KEY    = sk-...
+#
+# Without the secret set, the corresponding job is skipped.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 1"   # Monday morning sanity check
+
+jobs:
+  anthropic-live:
+    name: probe Anthropic API
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.repository_owner == 'deonmenezes' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Skip if no secret
+        id: gate
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "no ANTHROPIC_API_KEY secret; skipping" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build mantis CLI
+        if: steps.gate.outputs.skip != 'true'
+        run: cargo build --release -p mantis-cli
+      - name: Probe Anthropic
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          ./target/release/mantis llm probe --provider anthropic --prompt "Say ok" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  openai-live:
+    name: probe OpenAI API
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.repository_owner == 'deonmenezes' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Skip if no secret
+        id: gate
+        run: |
+          if [ -z "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "no OPENAI_API_KEY secret; skipping" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build mantis CLI
+        if: steps.gate.outputs.skip != 'true'
+        run: cargo build --release -p mantis-cli
+      - name: Probe OpenAI
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          ./target/release/mantis llm probe --provider openai --prompt "Say ok" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

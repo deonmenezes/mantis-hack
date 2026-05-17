@@ -40,6 +40,7 @@ members = [
     "crates/mantis-chain",
     "crates/mantis-crawler",
     "crates/mantis-video",
+    "crates/mantis-crawler-dynamic",
 ]
 
 [workspace.package]
@@ -88,6 +89,7 @@ mantis-benches = { path = "crates/mantis-benches" }
 mantis-chain = { path = "crates/mantis-chain" }
 mantis-crawler = { path = "crates/mantis-crawler" }
 mantis-video = { path = "crates/mantis-video" }
+mantis-crawler-dynamic = { path = "crates/mantis-crawler-dynamic" }
 core_affinity = "0.8"
 num_cpus = "1.16"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }

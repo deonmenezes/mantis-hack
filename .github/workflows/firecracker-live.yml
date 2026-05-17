@@ -1,0 +1,74 @@
+name: firecracker-live
+
+# Boots a real Firecracker microVM in CI using the public
+# Firecracker quickstart artifacts. Closes the "code-complete but
+# never run against /dev/kvm" gap from the PRD audit.
+#
+# GitHub-hosted ubuntu-latest runners expose /dev/kvm on Linux
+# (as of late 2023). If this is no longer the case in a future
+# runner image, swap to a self-hosted runner or the
+# microvm-runner GitHub Action.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1"
+
+jobs:
+  live-boot:
+    name: live microVM boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check KVM availability
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "KVM available"
+            ls -l /dev/kvm
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::/dev/kvm not present on this runner — skipping"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install firecracker
+        if: steps.kvm.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          version=v1.7.0
+          curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${version}/firecracker-${version}-x86_64.tgz" \
+            | tar -xz
+          install -m 0755 "release-${version}-x86_64/firecracker-${version}-x86_64" \
+            /usr/local/bin/firecracker
+          firecracker --version
+
+      - name: Download Firecracker quickstart kernel + rootfs
+        if: steps.kvm.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p fixtures
+          # Public Firecracker CI fixtures (small, hello-world kernel)
+          curl -fsSL -o fixtures/vmlinux \
+            "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+          curl -fsSL -o fixtures/rootfs.ext4 \
+            "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4"
+          ls -la fixtures
+
+      - name: Run live-boot integration test
+        if: steps.kvm.outputs.available == 'true'
+        env:
+          MANTIS_FC_BINARY: /usr/local/bin/firecracker
+          MANTIS_FC_KERNEL: ${{ github.workspace }}/fixtures/vmlinux
+          MANTIS_FC_ROOTFS: ${{ github.workspace }}/fixtures/rootfs.ext4
+        run: |
+          cargo test -p mantis-sandbox --test firecracker_live --release -- --nocapture
+
+      - name: Report skip
+        if: steps.kvm.outputs.available != 'true'
+        run: |
+          echo "/dev/kvm not present on this runner — live-boot test was skipped" >> "$GITHUB_STEP_SUMMARY"
