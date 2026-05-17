@@ -1,0 +1,25 @@
+[plugin]
+name = "mantis"
+version = "0.1.0"
+description = "Mantis offensive-security daemon — slash commands for authorized engagements."
+homepage = "https://github.com/deonmenezes/mantishack"
+
+[[commands]]
+name = "mantis-scan"
+description = "Kick off a Mantis engagement against an authorized target."
+prompt_file = "prompts/scan.md"
+
+[[commands]]
+name = "mantis-status"
+description = "Show engagement status."
+prompt_file = "prompts/status.md"
+
+[[commands]]
+name = "mantis-claim"
+description = "Inspect a verified claim and its reproducer."
+prompt_file = "prompts/claim.md"
+
+[[commands]]
+name = "mantis-report"
+description = "Render a disclosure-ready report (markdown/pdf/hackerone/bugcrowd/sarif/openvex)."
+prompt_file = "prompts/report.md"

@@ -1,0 +1,13 @@
+{
+  "name": "mantis",
+  "version": "0.1.0",
+  "description": "Mantis offensive-security daemon — slash commands for authorized engagements.",
+  "homepage": "https://github.com/deonmenezes/mantishack",
+  "commands": [
+    {"slash": "/mantis-scan", "file": "commands/scan.md"},
+    {"slash": "/mantis-status", "file": "commands/status.md"},
+    {"slash": "/mantis-claim", "file": "commands/claim.md"},
+    {"slash": "/mantis-report", "file": "commands/report.md"},
+    {"slash": "/mantis-daemon", "file": "commands/daemon.md"}
+  ]
+}

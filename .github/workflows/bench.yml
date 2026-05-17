@@ -1,0 +1,69 @@
+name: bench
+
+# Validates PRD §11 performance targets on a sized Linux runner.
+# The benchmarks run on every push to main and report into the
+# job summary so the project page shows current numbers.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  criterion:
+    name: criterion benchmarks (§11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-${{ runner.os }}
+      - name: Run criterion benches
+        id: bench
+        run: |
+          set -euo pipefail
+          cargo bench -p mantis-benches --bench perf_targets -- \
+            --warm-up-time 1 --measurement-time 3 --sample-size 20 \
+            2>&1 | tee bench-output.txt
+      - name: Summarize benchmark results
+        if: always()
+        run: |
+          {
+            echo "## Mantis benchmark results"
+            echo ""
+            echo "### PRD §11 targets"
+            echo ""
+            echo "| Metric | Target |"
+            echo "|---|---|"
+            echo "| Daemon cold start | ≤200 ms |"
+            echo "| Sandbox warm invocation | ≤500 µs |"
+            echo "| Event log query, 1B events | ≤1 s |"
+            echo ""
+            echo "### Measured"
+            echo ""
+            echo '\`\`\`'
+            grep -E "time:|TARGET " bench-output.txt || true
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload bench output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-output
+          path: bench-output.txt
+          retention-days: 30
+
+  scalability:
+    name: scalability tests (§6.2.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: scalability-${{ runner.os }}
+      - run: cargo test -p mantis-event-store --test scalability --release -- --nocapture

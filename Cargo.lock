@@ -2453,6 +2453,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mantis-video"
+version = "0.0.1"
+dependencies = [
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "mantis-web-ui"
 version = "0.0.1"
 dependencies = [
