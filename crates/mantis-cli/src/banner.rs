@@ -33,7 +33,7 @@ const TAGLINE_BODY: &str = "ethically hack any website with the power of AI";
 /// Print the banner to stderr. Stderr because mantis subcommands
 /// emit JSON / structured data on stdout, and we don't want to
 /// pollute pipeable output.
-pub fn print() {
+pub(crate) fn print() {
     if std::env::var_os("MANTIS_NO_BANNER").is_some() {
         return;
     }
@@ -53,7 +53,8 @@ pub fn print() {
 }
 
 /// Print only if the caller hasn't already suppressed it via flag.
-pub fn maybe_print(suppress: bool) {
+#[allow(dead_code)]
+pub(crate) fn maybe_print(suppress: bool) {
     if !suppress {
         print();
     }
@@ -62,7 +63,8 @@ pub fn maybe_print(suppress: bool) {
 /// Plain (no-ANSI) version — used by the markdown slash-command
 /// renderer, log files, CI artifacts, etc. Returns the full string
 /// with a trailing newline.
-pub fn plain_text() -> String {
+#[allow(dead_code)]
+pub(crate) fn plain_text() -> String {
     let mut s = String::new();
     s.push('\n');
     for line in BANNER_LINES {

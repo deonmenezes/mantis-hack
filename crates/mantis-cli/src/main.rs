@@ -5,6 +5,8 @@
 //! generated `mantis.v1.Engagement` gRPC client (engagement).
 
 mod banner;
+mod llm_pick;
+mod setup;
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
@@ -24,11 +26,16 @@ const DEFAULT_DAEMON_ENDPOINT: &str = "http://127.0.0.1:50451";
 #[command(name = "mantis", version, about = "Mantis daemon CLI")]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// First-run interface — prints the Mantis banner and shows which
+    /// LLM providers are detected on this system (Anthropic API, OpenAI
+    /// API, Claude Code CLI). Tells you exactly what to set to get
+    /// ready. Running `mantis` with no subcommand is equivalent.
+    Setup,
     /// Start the Mantis daemon in the foreground.
     Daemon {
         #[arg(long, env = "MANTIS_BIND", default_value = mantis_daemon::DEFAULT_BIND)]
@@ -393,7 +400,19 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    match cli.command {
+    let command = match cli.command {
+        Some(c) => c,
+        None => {
+            // Bare `mantis` — show the first-run setup screen.
+            setup::run();
+            return Ok(());
+        }
+    };
+    match command {
+        Command::Setup => {
+            setup::run();
+            Ok(())
+        }
         Command::Daemon { bind, root } => run_async(async move {
             mantis_daemon::run(mantis_daemon::DaemonConfig {
                 bind,
@@ -1127,6 +1146,38 @@ async fn handle_hack(
         eprintln!("[mantishack]     supply --attacker-profile / --victim-profile to drive the full diff");
     }
 
+    // Optional LLM-augmented hypothesis: ask the picked provider for
+    // extra endpoint paths to probe. Never blocks — failures degrade
+    // to the deterministic wordlist alone.
+    let mut extra_paths = extra_paths;
+    if let Some((adapter, provider)) = llm_pick::pick() {
+        eprintln!(
+            "[mantishack]   ⚡ LLM provider: {} (asking for hypothesis paths)",
+            provider.label()
+        );
+        let suggested = llm_pick::suggest_paths(
+            adapter.as_ref(),
+            &target_url,
+            &discovered.notes,
+            supabase_signup.is_some(),
+        )
+        .await;
+        if suggested.is_empty() {
+            eprintln!("[mantishack]   ⚡ LLM returned no usable paths");
+        } else {
+            eprintln!(
+                "[mantishack]   ⚡ LLM suggested {} extra paths (e.g. {})",
+                suggested.len(),
+                suggested.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+            );
+            extra_paths.extend(suggested);
+        }
+    } else {
+        eprintln!(
+            "[mantishack]   ⚡ no LLM configured (set ANTHROPIC_API_KEY / OPENAI_API_KEY or install `claude`); skipping hypothesis step"
+        );
+    }
+
     eprintln!("[mantishack] phase 2/3: signup + enumerate + auth-diff");
     handle_find_auth_bugs(
         target_url,
@@ -1317,10 +1368,66 @@ async fn handle_find_auth_bugs(
             eprintln!("[mantis-find-auth-bugs] readme:              {}", outcome.readme.display());
             eprintln!("[mantis-find-auth-bugs] vulnerability-report: {}", outcome.vuln_report.display());
             eprintln!("[mantis-find-auth-bugs] findings written:    {}", outcome.finding_count);
+
+            // Optional LLM-augmented executive summary appended to
+            // vulnerability-report.md. Best-effort; never blocks.
+            if let Some((adapter, provider)) = llm_pick::pick() {
+                eprintln!(
+                    "[mantis-find-auth-bugs] LLM provider: {} (drafting executive summary)",
+                    provider.label()
+                );
+                let summary = build_findings_summary(&target, &report, elapsed);
+                llm_pick::append_exec_summary(adapter.as_ref(), &outcome.vuln_report, &summary).await;
+            }
         }
         Err(e) => eprintln!("[mantis-find-auth-bugs] archive error: {e}"),
     }
     Ok(())
+}
+
+/// Short, factual blob fed to the LLM for the executive summary.
+/// Stays under ~2KB so it's cheap and fits in any model's context.
+fn build_findings_summary(
+    target: &str,
+    report: &mantis_orchestrator::AuthBugReport,
+    elapsed: std::time::Duration,
+) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("Target: {target}\n"));
+    s.push_str(&format!("Elapsed: {:.2}s\n", elapsed.as_secs_f64()));
+    s.push_str(&format!("Endpoints probed: {}\n", report.endpoints_probed));
+    s.push_str(&format!(
+        "Endpoints with findings: {}\n",
+        report.endpoints_with_findings
+    ));
+    s.push_str(&format!("Findings total: {}\n", report.findings_total));
+    if !report.findings_by_severity.is_empty() {
+        s.push_str("By severity:\n");
+        for sev in ["critical", "high", "medium", "low", "info"] {
+            if let Some(n) = report.findings_by_severity.get(sev) {
+                s.push_str(&format!("  {sev}: {n}\n"));
+            }
+        }
+    }
+    if !report.findings_by_class.is_empty() {
+        s.push_str("By class:\n");
+        for (k, v) in report.findings_by_class.iter().take(10) {
+            s.push_str(&format!("  {k}: {v}\n"));
+        }
+    }
+    let with_hits: Vec<_> = report
+        .per_endpoint
+        .iter()
+        .filter(|e| !e.findings.is_empty())
+        .take(10)
+        .collect();
+    if !with_hits.is_empty() {
+        s.push_str("Top endpoints with findings:\n");
+        for ep in &with_hits {
+            s.push_str(&format!("  {} ({} finding(s))\n", ep.url, ep.findings.len()));
+        }
+    }
+    s
 }
 
 /// Crude host extraction for output-folder naming.
