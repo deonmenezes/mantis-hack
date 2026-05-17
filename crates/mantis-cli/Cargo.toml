@@ -13,10 +13,17 @@ name = "mantis"
 path = "src/main.rs"
 
 [dependencies]
+mantis-auth = { workspace = true }
+mantis-auth-differential = { workspace = true }
 mantis-core = { workspace = true }
 mantis-daemon = { workspace = true }
+mantis-fsm = { workspace = true }
+mantis-orchestrator = { workspace = true }
+mantis-recon-tools = { workspace = true }
 mantis-proto = { workspace = true }
+mantis-scanner-http = { workspace = true }
 mantis-scope = { workspace = true }
+mantis-signup = { workspace = true }
 mantis-synthesizer = { workspace = true }
 mantis-workspace = { workspace = true }
 
