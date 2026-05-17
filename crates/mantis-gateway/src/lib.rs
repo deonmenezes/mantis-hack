@@ -15,6 +15,7 @@ pub mod inbound;
 pub mod platform;
 pub mod platforms;
 pub mod registry;
+pub mod telegram;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -25,10 +26,12 @@ pub use crate::platform::{
     MessagingPlatform, Notification, NotificationKind, PlatformId, Severity,
 };
 pub use crate::platforms::{
-    DiscordPlatform, EmailPlatform, MatrixPlatform, SignalPlatform, SlackPlatform,
-    TelegramPlatform, WhatsAppPlatform,
+    DiscordPlatform, EmailPlatform, MatrixPlatform, SignalPlatform, SlackPlatform, WhatsAppPlatform,
 };
 pub use crate::registry::GatewayRegistry;
+pub use crate::telegram::{
+    InboundMessage as TelegramInboundMessage, TelegramPlatform, UpdateBatch,
+};
 
 #[derive(Debug, Error)]
 pub enum GatewayError {
@@ -40,6 +43,9 @@ pub enum GatewayError {
 
     #[error("transport error: {0}")]
     Transport(String),
+
+    #[error("backend: {0}")]
+    Backend(String),
 
     #[error("internal lock poisoned")]
     Poisoned,

@@ -63,11 +63,25 @@ impl GatewayRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::NotificationKind;
-    use crate::platforms::{DiscordPlatform, TelegramPlatform};
-    use crate::Notification;
+    use crate::platform::{Notification, NotificationKind};
+    use crate::platforms::{DiscordPlatform, SignalPlatform};
+    use async_trait::async_trait;
     use mantis_core::OperatorId;
     use ulid::Ulid;
+
+    /// Test double that implements MessagingPlatform with a no-op
+    /// send. Used here so the registry tests don't depend on a
+    /// real network call from the live TelegramPlatform.
+    struct FakeTelegram;
+    #[async_trait]
+    impl MessagingPlatform for FakeTelegram {
+        fn platform_id(&self) -> PlatformId {
+            PlatformId::Telegram
+        }
+        async fn send(&self, _b: &IdentityBinding, _n: &Notification) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
 
     fn notif() -> Notification {
         Notification {
@@ -100,7 +114,7 @@ mod tests {
             })
             .unwrap();
         let mut registry = GatewayRegistry::new(identities);
-        registry.register(Arc::new(TelegramPlatform));
+        registry.register(Arc::new(FakeTelegram));
         registry.register(Arc::new(DiscordPlatform));
 
         let envelope = OutboundEnvelope {
@@ -114,10 +128,10 @@ mod tests {
     #[test]
     fn registry_lists_platforms_alphabetically() {
         let mut registry = GatewayRegistry::new(Arc::new(IdentityStore::new()));
-        registry.register(Arc::new(TelegramPlatform));
+        registry.register(Arc::new(SignalPlatform));
         registry.register(Arc::new(DiscordPlatform));
         let ids = registry.platform_ids();
         assert_eq!(ids[0].name(), "discord");
-        assert_eq!(ids[1].name(), "telegram");
+        assert_eq!(ids[1].name(), "signal");
     }
 }

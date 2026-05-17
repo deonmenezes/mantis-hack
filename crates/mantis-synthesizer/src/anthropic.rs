@@ -9,6 +9,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::retry::{classify_status, parse_retry_after, RetryDecision, RetryPolicy};
 use crate::{LlmAdapter, SynthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -24,6 +25,7 @@ pub struct AnthropicAdapter {
     model: String,
     api_version: String,
     max_tokens: u32,
+    retry: RetryPolicy,
 }
 
 impl AnthropicAdapter {
@@ -35,6 +37,7 @@ impl AnthropicAdapter {
             model: DEFAULT_MODEL.into(),
             api_version: DEFAULT_API_VERSION.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
+            retry: RetryPolicy::default(),
         }
     }
 
@@ -52,6 +55,11 @@ impl AnthropicAdapter {
         self.max_tokens = max_tokens;
         self
     }
+
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
 }
 
 #[async_trait]
@@ -65,41 +73,62 @@ impl LlmAdapter for AnthropicAdapter {
                 content: prompt,
             }],
         };
-
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
-        let resp = self
-            .client
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", &self.api_version)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| SynthError::Backend(format!("anthropic request: {e}")))?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| SynthError::Backend(format!("anthropic serialize: {e}")))?;
 
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| SynthError::Backend(format!("anthropic body: {e}")))?;
+        let mut last_error = String::new();
+        for attempt in 1..=self.retry.max_attempts {
+            let resp = self
+                .client
+                .post(&url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", &self.api_version)
+                .header("content-type", "application/json")
+                .body(body_bytes.clone())
+                .send()
+                .await
+                .map_err(|e| SynthError::Backend(format!("anthropic request: {e}")))?;
 
-        if !status.is_success() {
-            return Err(SynthError::Backend(format!(
-                "anthropic {}: {text}",
-                status.as_u16()
-            )));
+            let status = resp.status().as_u16();
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_retry_after);
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| SynthError::Backend(format!("anthropic body: {e}")))?;
+
+            match classify_status(status, retry_after, &self.retry, attempt) {
+                RetryDecision::Done => {
+                    let parsed: Response = serde_json::from_str(&text)
+                        .map_err(|e| SynthError::Backend(format!("anthropic parse: {e}")))?;
+                    return parsed
+                        .content
+                        .into_iter()
+                        .find_map(|block| match block {
+                            ContentBlock::Text { text } if !text.is_empty() => Some(text),
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            SynthError::Backend("anthropic returned no text block".into())
+                        });
+                }
+                RetryDecision::Retry(delay) => {
+                    last_error = format!("anthropic {status}: {text}");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                RetryDecision::Fatal => {
+                    return Err(SynthError::Backend(format!("anthropic {status}: {text}")));
+                }
+            }
         }
-
-        let parsed: Response = serde_json::from_str(&text)
-            .map_err(|e| SynthError::Backend(format!("anthropic parse: {e}")))?;
-        parsed
-            .content
-            .into_iter()
-            .find_map(|block| match block {
-                ContentBlock::Text { text } if !text.is_empty() => Some(text),
-                _ => None,
-            })
-            .ok_or_else(|| SynthError::Backend("anthropic returned no text block".into()))
+        Err(SynthError::Backend(format!(
+            "anthropic exhausted retries: {last_error}"
+        )))
     }
 }
 

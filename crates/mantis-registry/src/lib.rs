@@ -9,8 +9,11 @@
 //! M5.2b once the client uses the same types.
 
 pub mod entry;
+pub mod oci_client;
 pub mod publisher;
 pub mod search;
+
+pub use crate::oci_client::{OciClient, OciDescriptor, OciManifest};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::retry::{classify_status, parse_retry_after, RetryDecision, RetryPolicy};
 use crate::{LlmAdapter, SynthError};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com";
@@ -20,6 +21,7 @@ pub struct OpenAIAdapter {
     base_url: String,
     model: String,
     max_tokens: u32,
+    retry: RetryPolicy,
 }
 
 impl OpenAIAdapter {
@@ -30,6 +32,7 @@ impl OpenAIAdapter {
             base_url: DEFAULT_BASE_URL.into(),
             model: DEFAULT_MODEL.into(),
             max_tokens: DEFAULT_MAX_TOKENS,
+            retry: RetryPolicy::default(),
         }
     }
 
@@ -47,6 +50,11 @@ impl OpenAIAdapter {
         self.max_tokens = max_tokens;
         self
     }
+
+    pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
+        self
+    }
 }
 
 #[async_trait]
@@ -60,46 +68,67 @@ impl LlmAdapter for OpenAIAdapter {
                 content: prompt,
             }],
         };
-
         let url = format!(
             "{}/v1/chat/completions",
             self.base_url.trim_end_matches('/')
         );
-        let resp = self
-            .client
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| SynthError::Backend(format!("openai request: {e}")))?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| SynthError::Backend(format!("openai serialize: {e}")))?;
 
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| SynthError::Backend(format!("openai body: {e}")))?;
+        let mut last_error = String::new();
+        for attempt in 1..=self.retry.max_attempts {
+            let resp = self
+                .client
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .header("content-type", "application/json")
+                .body(body_bytes.clone())
+                .send()
+                .await
+                .map_err(|e| SynthError::Backend(format!("openai request: {e}")))?;
 
-        if !status.is_success() {
-            return Err(SynthError::Backend(format!(
-                "openai {}: {text}",
-                status.as_u16()
-            )));
-        }
+            let status = resp.status().as_u16();
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_retry_after);
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| SynthError::Backend(format!("openai body: {e}")))?;
 
-        let parsed: Response = serde_json::from_str(&text)
-            .map_err(|e| SynthError::Backend(format!("openai parse: {e}")))?;
-        parsed
-            .choices
-            .into_iter()
-            .find_map(|c| {
-                if c.message.content.is_empty() {
-                    None
-                } else {
-                    Some(c.message.content)
+            match classify_status(status, retry_after, &self.retry, attempt) {
+                RetryDecision::Done => {
+                    let parsed: Response = serde_json::from_str(&text)
+                        .map_err(|e| SynthError::Backend(format!("openai parse: {e}")))?;
+                    return parsed
+                        .choices
+                        .into_iter()
+                        .find_map(|c| {
+                            if c.message.content.is_empty() {
+                                None
+                            } else {
+                                Some(c.message.content)
+                            }
+                        })
+                        .ok_or_else(|| {
+                            SynthError::Backend("openai returned no choice content".into())
+                        });
                 }
-            })
-            .ok_or_else(|| SynthError::Backend("openai returned no choice content".into()))
+                RetryDecision::Retry(delay) => {
+                    last_error = format!("openai {status}: {text}");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                RetryDecision::Fatal => {
+                    return Err(SynthError::Backend(format!("openai {status}: {text}")));
+                }
+            }
+        }
+        Err(SynthError::Backend(format!(
+            "openai exhausted retries: {last_error}"
+        )))
     }
 }
 

@@ -26,6 +26,7 @@
 
 pub mod anthropic;
 pub mod openai;
+pub mod retry;
 
 use std::collections::HashMap;
 use std::path::Path;

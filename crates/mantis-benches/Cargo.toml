@@ -1,0 +1,37 @@
+[package]
+name = "mantis-benches"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Criterion benchmarks measuring against PRD §11 performance targets."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mantis-event-store = { workspace = true }
+mantis-planner = { workspace = true }
+mantis-posterior = { workspace = true }
+mantis-report = { workspace = true }
+mantis-claim = { workspace = true }
+mantis-primitive = { workspace = true }
+mantis-sandbox = { workspace = true }
+mantis-core = { workspace = true }
+
+[dev-dependencies]
+camino = { workspace = true }
+criterion = { workspace = true, features = ["async_tokio"] }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+wat = { workspace = true }
+
+[[bench]]
+name = "perf_targets"
+harness = false
+
+[lints]
+workspace = true

@@ -30,7 +30,7 @@ macro_rules! stub_platform {
     };
 }
 
-stub_platform!(TelegramPlatform, PlatformId::Telegram);
+// Telegram has a real reqwest-backed adapter in `crate::telegram`.
 stub_platform!(SignalPlatform, PlatformId::Signal);
 stub_platform!(DiscordPlatform, PlatformId::Discord);
 stub_platform!(SlackPlatform, PlatformId::Slack);
@@ -74,9 +74,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_platform_reports_its_id() {
-        let cases: [(Box<dyn MessagingPlatform>, PlatformId); 7] = [
-            (Box::new(TelegramPlatform), PlatformId::Telegram),
+    async fn each_stub_platform_reports_its_id() {
+        let cases: [(Box<dyn MessagingPlatform>, PlatformId); 6] = [
             (Box::new(SignalPlatform), PlatformId::Signal),
             (Box::new(DiscordPlatform), PlatformId::Discord),
             (Box::new(SlackPlatform), PlatformId::Slack),

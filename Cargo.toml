@@ -36,6 +36,7 @@ members = [
     "crates/mantis-tui-ratatui",
     "crates/mantis-web-ui",
     "crates/mantis-runtime",
+    "crates/mantis-benches",
 ]
 
 [workspace.package]
@@ -80,8 +81,10 @@ mantis-tui = { path = "crates/mantis-tui" }
 mantis-tui-ratatui = { path = "crates/mantis-tui-ratatui" }
 mantis-web-ui = { path = "crates/mantis-web-ui" }
 mantis-runtime = { path = "crates/mantis-runtime" }
+mantis-benches = { path = "crates/mantis-benches" }
 core_affinity = "0.8"
 num_cpus = "1.16"
+criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime"] }
 wat = "1"
