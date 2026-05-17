@@ -1,0 +1,31 @@
+[package]
+name = "mantis-workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Workspace layout, paths, and key management for Mantis."
+
+[dependencies]
+mantis-core = { workspace = true }
+blake3 = { workspace = true }
+camino = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+keyring = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

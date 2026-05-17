@@ -1,0 +1,22 @@
+[package]
+name = "mantis-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Operator gateway. Trait + scaffolds for 7 messaging platforms (Telegram, Signal, Discord, Slack, WhatsApp, Matrix, Email) per PRD §9.4."
+
+[dependencies]
+mantis-core = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

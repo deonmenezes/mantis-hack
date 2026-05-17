@@ -1,0 +1,144 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mantis-core",
+    "crates/mantis-proto",
+    "crates/mantis-workspace",
+    "crates/mantis-event-store",
+    "crates/mantis-scope",
+    "crates/mantis-egress",
+    "crates/mantis-scanner-http",
+    "crates/mantis-hypothesis",
+    "crates/mantis-daemon",
+    "crates/mantis-cli",
+    "crates/mantis-verify",
+    "crates/mantis-primitive",
+    "crates/mantis-claim",
+    "crates/mantis-report",
+    "crates/mantis-planner",
+    "crates/mantis-posterior",
+    "crates/mantis-plugin",
+    "crates/mantis-playbook",
+    "crates/mantis-scheduler",
+    "crates/mantis-tenant",
+    "crates/mantis-operator-model",
+    "crates/mantis-memory",
+    "crates/mantis-hibernation",
+    "crates/mantis-trajectory",
+    "crates/mantis-gateway",
+    "crates/mantis-tuner",
+    "crates/mantis-k8s",
+    "crates/mantis-registry",
+    "crates/mantis-sandbox",
+    "crates/mantis-synthesizer",
+    "crates/mantis-fuzzer",
+    "crates/mantis-tui",
+    "crates/mantis-tui-ratatui",
+    "crates/mantis-web-ui",
+    "crates/mantis-runtime",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0 OR MIT"
+authors = ["Mantis Contributors"]
+repository = "https://github.com/deonmenezes/mantishack"
+
+[workspace.dependencies]
+mantis-core = { path = "crates/mantis-core" }
+mantis-proto = { path = "crates/mantis-proto" }
+mantis-workspace = { path = "crates/mantis-workspace" }
+mantis-event-store = { path = "crates/mantis-event-store" }
+mantis-scope = { path = "crates/mantis-scope" }
+mantis-egress = { path = "crates/mantis-egress" }
+mantis-scanner-http = { path = "crates/mantis-scanner-http" }
+mantis-hypothesis = { path = "crates/mantis-hypothesis" }
+mantis-daemon = { path = "crates/mantis-daemon" }
+mantis-primitive = { path = "crates/mantis-primitive" }
+mantis-claim = { path = "crates/mantis-claim" }
+mantis-report = { path = "crates/mantis-report" }
+mantis-planner = { path = "crates/mantis-planner" }
+mantis-posterior = { path = "crates/mantis-posterior" }
+mantis-plugin = { path = "crates/mantis-plugin" }
+mantis-playbook = { path = "crates/mantis-playbook" }
+mantis-scheduler = { path = "crates/mantis-scheduler" }
+mantis-tenant = { path = "crates/mantis-tenant" }
+mantis-operator-model = { path = "crates/mantis-operator-model" }
+mantis-memory = { path = "crates/mantis-memory" }
+mantis-hibernation = { path = "crates/mantis-hibernation" }
+mantis-trajectory = { path = "crates/mantis-trajectory" }
+mantis-gateway = { path = "crates/mantis-gateway" }
+mantis-tuner = { path = "crates/mantis-tuner" }
+mantis-k8s = { path = "crates/mantis-k8s" }
+mantis-registry = { path = "crates/mantis-registry" }
+mantis-sandbox = { path = "crates/mantis-sandbox" }
+mantis-synthesizer = { path = "crates/mantis-synthesizer" }
+mantis-fuzzer = { path = "crates/mantis-fuzzer" }
+mantis-tui = { path = "crates/mantis-tui" }
+mantis-tui-ratatui = { path = "crates/mantis-tui-ratatui" }
+mantis-web-ui = { path = "crates/mantis-web-ui" }
+mantis-runtime = { path = "crates/mantis-runtime" }
+core_affinity = "0.8"
+num_cpus = "1.16"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+wasmtime = { version = "26", default-features = false, features = ["cranelift", "runtime"] }
+wat = "1"
+
+tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
+async-trait = "0.1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+thiserror = "1.0"
+anyhow = "1.0"
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+clap = { version = "4", features = ["derive", "env"] }
+
+ulid = { version = "1", features = ["serde"] }
+camino = { version = "1", features = ["serde1"] }
+blake3 = "1.5"
+
+ed25519-dalek = { version = "2.1", features = ["pkcs8", "rand_core", "serde", "zeroize"] }
+rand = { version = "0.8", features = ["small_rng"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+hex = "0.4"
+tempfile = "3"
+
+rocksdb = { version = "0.22", default-features = false, features = ["snappy"] }
+serde_yaml_ng = "0.10"
+glob-match = "0.2"
+httparse = "1.9"
+
+tonic = "0.12"
+tonic-build = "0.12"
+prost = "0.13"
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"

@@ -1,0 +1,17 @@
+[package]
+name = "mantis-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Shared types, errors, and pure logic for the Mantis daemon."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

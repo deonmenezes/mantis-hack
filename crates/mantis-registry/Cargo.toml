@@ -1,0 +1,17 @@
+[package]
+name = "mantis-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Public plugin registry types. OCI artifact references, signature manifests, registry-side metadata (PRD §15 Phase 5)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

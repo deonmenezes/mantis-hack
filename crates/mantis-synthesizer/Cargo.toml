@@ -1,0 +1,25 @@
+[package]
+name = "mantis-synthesizer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Exploit synthesizer pipeline (PRD §5.7.4). Corpus retrieval → fuzzer → LLM, returning the first sandbox-verified payload."
+
+[dependencies]
+mantis-fuzzer = { workspace = true }
+mantis-sandbox = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

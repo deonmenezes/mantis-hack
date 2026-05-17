@@ -1,0 +1,17 @@
+[package]
+name = "mantis-k8s"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Kubernetes operator types. Custom Resource Definitions for Engagement, ScheduledScan, and ResultExport (PRD §14.5)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+
+[lints]
+workspace = true

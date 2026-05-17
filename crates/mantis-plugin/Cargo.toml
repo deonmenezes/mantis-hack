@@ -1,0 +1,19 @@
+[package]
+name = "mantis-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Plugin manifest, capability typing, and registry. M2.1 adds wasmtime-based execution."
+
+[dependencies]
+mantis-core = { workspace = true }
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

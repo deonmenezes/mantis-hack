@@ -1,0 +1,15 @@
+[package]
+name = "mantis-posterior"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Beta-posterior update layer over the planner's static priors. Tracks per-(stack, vuln_class) success/failure rates."
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

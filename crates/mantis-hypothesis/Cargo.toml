@@ -1,0 +1,20 @@
+[package]
+name = "mantis-hypothesis"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Rule-based hypothesis generator over discovered surfaces."
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-event-store = { workspace = true }
+mantis-scanner-http = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "mantis-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cross-engagement memory. Indexes historical observations and produces a brief for new engagements (PRD §5.11)."
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-event-store = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+ulid = { workspace = true }
+
+[lints]
+workspace = true

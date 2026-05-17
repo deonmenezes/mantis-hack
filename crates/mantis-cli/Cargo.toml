@@ -1,0 +1,32 @@
+[package]
+name = "mantis-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Mantis CLI client (`mantis` binary)."
+
+[[bin]]
+name = "mantis"
+path = "src/main.rs"
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-daemon = { workspace = true }
+mantis-proto = { workspace = true }
+mantis-workspace = { workspace = true }
+
+anyhow = { workspace = true }
+camino = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

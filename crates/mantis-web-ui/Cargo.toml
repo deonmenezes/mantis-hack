@@ -1,0 +1,19 @@
+[package]
+name = "mantis-web-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Daemon-served Web UI (PRD §9.3, M4.3). Tokio HTTP/1.1 server with HTML shell, JSON state, and SSE event stream."
+
+[dependencies]
+httparse = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

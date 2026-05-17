@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package mantis.v1;
+
+// The Engagement service is the daemon's authoritative API for
+// engagement lifecycle. Phase 0 M0.4 ships the subset required for
+// the end-to-end demo: Create, Authorize, Start, Pause, Status, List.
+
+service Engagement {
+  rpc Create(CreateRequest) returns (EngagementInfo);
+  rpc Authorize(AuthorizeRequest) returns (EngagementInfo);
+  rpc Start(StartRequest) returns (EngagementInfo);
+  rpc Pause(PauseRequest) returns (EngagementInfo);
+  rpc Status(StatusRequest) returns (EngagementInfo);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Scan(ScanRequest) returns (ScanResponse);
+  rpc Export(ExportRequest) returns (ExportResponse);
+}
+
+enum EngagementState {
+  ENGAGEMENT_STATE_UNSPECIFIED = 0;
+  ENGAGEMENT_STATE_DRAFT = 1;
+  ENGAGEMENT_STATE_AUTHORIZED = 2;
+  ENGAGEMENT_STATE_ACTIVE = 3;
+  ENGAGEMENT_STATE_PAUSED = 4;
+  ENGAGEMENT_STATE_COMPLETED = 5;
+  ENGAGEMENT_STATE_ARCHIVED = 6;
+}
+
+message EngagementInfo {
+  string id = 1;
+  string name = 2;
+  EngagementState state = 3;
+  uint64 created_at_unix = 4;
+  optional string scope_hash = 5;
+  uint64 event_count = 6;
+  optional string fingerprint = 7;
+}
+
+message CreateRequest {
+  string name = 1;
+}
+
+message AuthorizeRequest {
+  string id = 1;
+  // JSON-serialized SignedScope (see ADR-0003).
+  bytes signed_scope_json = 2;
+}
+
+message StartRequest { string id = 1; }
+message PauseRequest { string id = 1; }
+message StatusRequest { string id = 1; }
+
+message ListRequest {}
+message ListResponse {
+  repeated EngagementInfo engagements = 1;
+}
+
+message ScanRequest {
+  string id = 1;
+  // URL targets (e.g. "https://api.example.com/v1/users").
+  repeated string targets = 2;
+}
+message ScanResponse {
+  string id = 1;
+  uint32 surfaces_recorded = 2;
+  uint32 hypotheses_recorded = 3;
+}
+
+message ExportRequest {
+  string id = 1;
+}
+message ExportResponse {
+  // One JSON object per line, newline-separated.
+  bytes jsonl = 1;
+}

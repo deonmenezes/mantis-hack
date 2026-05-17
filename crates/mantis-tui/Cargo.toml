@@ -1,0 +1,15 @@
+[package]
+name = "mantis-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Terminal UI model-view (Phase 2 M2.4). Renders engagement state to ASCII; the ratatui binding lands in M2.4b."
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

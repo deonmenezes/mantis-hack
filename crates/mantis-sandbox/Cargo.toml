@@ -1,0 +1,24 @@
+[package]
+name = "mantis-sandbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Sandbox runtime abstraction. Backends: record-replay (deterministic playback) and wasmtime (capability-typed WASM execution per PRD §6.4.1)."
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+wasmtime = { workspace = true }
+
+[dev-dependencies]
+wat = { workspace = true }
+
+[lints]
+workspace = true

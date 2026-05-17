@@ -1,0 +1,28 @@
+[package]
+name = "mantis-scanner-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "HTTP probing and content discovery scanner."
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-event-store = { workspace = true }
+
+reqwest = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+camino = { workspace = true }
+mantis-workspace = { workspace = true }
+tempfile = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

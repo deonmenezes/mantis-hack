@@ -1,0 +1,21 @@
+[package]
+name = "mantis-trajectory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Compressed engagement trajectories for training and analysis (PRD §5.13)."
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-event-store = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ulid = { workspace = true }
+
+[lints]
+workspace = true

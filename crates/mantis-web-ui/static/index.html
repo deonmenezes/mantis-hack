@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mantis</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --fg: #e6edf3;
+      --dim: #8b949e;
+      --accent: #58a6ff;
+      --critical: #f85149;
+      --high: #ff8a4c;
+      --medium: #d2b048;
+      --low: #56d364;
+      --panel: #161b22;
+      --border: #30363d;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 13px;
+    }
+    header {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 14px;
+      color: var(--accent);
+      letter-spacing: 2px;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 1px;
+      background: var(--border);
+      height: calc(100vh - 49px);
+    }
+    section {
+      background: var(--panel);
+      padding: 12px 16px;
+      overflow: auto;
+    }
+    section h2 {
+      margin: 0 0 12px 0;
+      font-size: 11px;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 4px 8px;
+      border-bottom: 1px solid var(--border);
+      font-weight: normal;
+    }
+    th { color: var(--dim); font-size: 11px; }
+    .sev-Critical { color: var(--critical); font-weight: bold; }
+    .sev-High { color: var(--high); }
+    .sev-Medium { color: var(--medium); }
+    .sev-Low { color: var(--low); }
+    .log {
+      font-size: 12px;
+      white-space: pre-wrap;
+      color: var(--dim);
+    }
+    .log-line { padding: 1px 0; }
+    .status-pill {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      background: var(--border);
+    }
+    #status { font-size: 11px; color: var(--dim); }
+    #status.connected { color: var(--low); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MANTIS</h1>
+    <span id="status">connecting…</span>
+  </header>
+  <main>
+    <section id="engagements-pane">
+      <h2>engagements</h2>
+      <table>
+        <thead><tr><th>id</th><th>name</th><th>state</th><th>events</th></tr></thead>
+        <tbody id="engagements-body"></tbody>
+      </table>
+    </section>
+    <section id="claims-pane">
+      <h2>claims</h2>
+      <table>
+        <thead><tr><th>severity</th><th>class</th><th>status</th><th>url</th></tr></thead>
+        <tbody id="claims-body"></tbody>
+      </table>
+    </section>
+    <section id="trace-pane">
+      <h2>live trace</h2>
+      <div id="trace" class="log">awaiting events…</div>
+    </section>
+    <section id="log-pane">
+      <h2>log tail</h2>
+      <div id="log" class="log"></div>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"
+    }[c]));
+
+    let state = { engagements: [], claims: [], log_tail: [] };
+
+    function renderEngagements() {
+      $("engagements-body").innerHTML = state.engagements.map((e) =>
+        `<tr><td>${escapeHtml(e.id)}</td><td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.state)}</td><td>${e.events}</td></tr>`
+      ).join("") || "<tr><td colspan=4 style='color:var(--dim)'>(no engagements)</td></tr>";
+    }
+    function renderClaims() {
+      $("claims-body").innerHTML = state.claims.slice(-50).reverse().map((c) =>
+        `<tr><td class="sev-${escapeHtml(c.severity)}">${escapeHtml(c.severity)}</td>` +
+        `<td>${escapeHtml(c.vuln_class)}</td>` +
+        `<td><span class="status-pill">${escapeHtml(c.status)}</span></td>` +
+        `<td>${escapeHtml(c.url)}</td></tr>`
+      ).join("") || "<tr><td colspan=4 style='color:var(--dim)'>(no claims)</td></tr>";
+    }
+    function renderLog() {
+      $("log").innerHTML = state.log_tail.slice(-200).reverse().map((l) =>
+        `<div class="log-line">${escapeHtml(l)}</div>`
+      ).join("");
+    }
+
+    async function fetchState() {
+      try {
+        const res = await fetch("/api/state");
+        state = await res.json();
+        renderEngagements();
+        renderClaims();
+        renderLog();
+      } catch (_) {}
+    }
+
+    function connectEvents() {
+      const es = new EventSource("/api/events");
+      const trace = $("trace");
+      const status = $("status");
+      es.onopen = () => { status.textContent = "connected"; status.classList.add("connected"); };
+      es.onerror = () => { status.textContent = "disconnected"; status.classList.remove("connected"); };
+      es.onmessage = (msg) => {
+        try {
+          const ev = JSON.parse(msg.data);
+          const line = `${new Date().toISOString().slice(11,19)}  ${JSON.stringify(ev)}`;
+          trace.innerHTML = `<div class="log-line">${escapeHtml(line)}</div>` + trace.innerHTML;
+          if (ev.type === "EngagementUpserted") {
+            const i = state.engagements.findIndex((e) => e.id === ev.id);
+            if (i >= 0) state.engagements[i] = ev; else state.engagements.push(ev);
+            renderEngagements();
+          } else if (ev.type === "ClaimAdded") {
+            state.claims.push(ev);
+            renderClaims();
+          } else if (ev.type === "LogLine") {
+            state.log_tail.push(ev.line);
+            renderLog();
+          }
+        } catch (_) {}
+      };
+    }
+
+    fetchState();
+    connectEvents();
+  </script>
+</body>
+</html>

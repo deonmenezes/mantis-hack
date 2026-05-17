@@ -1,0 +1,16 @@
+[package]
+name = "mantis-tui-ratatui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Ratatui-based terminal renderer for mantis-tui's ScreenModel (PRD §9.2)."
+
+[dependencies]
+mantis-tui = { workspace = true }
+ratatui = { workspace = true }
+
+[lints]
+workspace = true

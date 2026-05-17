@@ -1,0 +1,19 @@
+[package]
+name = "mantis-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Generated protobuf and tonic types for the Mantis daemon API."
+
+[dependencies]
+tonic = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[lints]
+workspace = true

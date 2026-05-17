@@ -1,0 +1,19 @@
+[package]
+name = "mantis-report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Engagement report generator. Phase 1 ships Markdown; later milestones add PDF (Typst), HackerOne JSON, Bugcrowd JSON, SARIF, OpenVEX."
+
+[dependencies]
+mantis-claim = { workspace = true }
+mantis-core = { workspace = true }
+mantis-primitive = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

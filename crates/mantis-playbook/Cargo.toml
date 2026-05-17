@@ -1,0 +1,19 @@
+[package]
+name = "mantis-playbook"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Playbook distiller. Mines verified-claim sequences from the event log into reusable parameterized recipes."
+
+[dependencies]
+mantis-event-store = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

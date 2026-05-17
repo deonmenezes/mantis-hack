@@ -1,0 +1,18 @@
+[package]
+name = "mantis-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Reactor-per-core actor placement and NUMA-aware core pinning (PRD §7.2)."
+
+[dependencies]
+core_affinity = { workspace = true }
+num_cpus = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

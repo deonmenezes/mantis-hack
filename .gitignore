@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+.envrc
+.direnv/
+.cargo/config.toml.local
+
+.omc/

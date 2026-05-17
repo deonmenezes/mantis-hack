@@ -1,0 +1,19 @@
+[package]
+name = "mantis-operator-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Operator preference model. Tracks operator-attended signals (severity thresholds, report formats, claim classes) to drive auto-promotion and notification timing."
+
+[dependencies]
+mantis-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+
+[lints]
+workspace = true

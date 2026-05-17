@@ -1,0 +1,28 @@
+[package]
+name = "mantis-primitive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Exploit primitives. A primitive runs a single hypothesis to a Confirmed/Denied/Inconclusive verdict."
+
+[dependencies]
+mantis-core = { workspace = true }
+mantis-scanner-http = { workspace = true }
+
+async-trait = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

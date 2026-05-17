@@ -1,0 +1,16 @@
+[package]
+name = "mantis-fuzzer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Grammar-aware coverage-guided fuzzer (PRD §5.7.4). Phase 2 M2.3 ships HTTP-parameter mutation grammars."
+
+[dependencies]
+rand = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true
