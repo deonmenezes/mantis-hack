@@ -12,3 +12,6 @@
 .cargo/config.toml.local
 
 .omc/
+
+# Per-engagement artifact directories written by `mantis pentest`.
+mantishack-*/

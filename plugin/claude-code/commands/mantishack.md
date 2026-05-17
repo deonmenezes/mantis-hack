@@ -53,6 +53,25 @@ Offer to:
 targets need `--budget-seconds 900`. Warn the user before running
 budgets over 30 minutes.
 
+**LLM provider — no API key needed inside Claude Code.** The
+pentest pipeline's corpus / fuzzer / symbolic engines do not
+require any LLM credentials, so basic runs work out of the box.
+The synthesizer's LLM path uses the `claude-cli` provider by
+default when invoked from this plugin: it shells out to the local
+`claude` CLI and reuses whatever Claude Code authentication the
+user already has — there is no need to export
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. The user can confirm the
+provider is reachable with:
+
+```sh
+mantis llm probe --provider claude-cli
+```
+
+If the user wants a different provider, set
+`MANTIS_CLAUDE_CLI_BIN`, `MANTIS_CLAUDE_CLI_MODEL`, or pass
+`--provider anthropic|openai` (which do require their respective
+env-var keys).
+
 **Refuse to run** if the user can't confirm authorization. Mantis
 enforces scope cryptographically at the egress proxy, but the
 legal gate is yours.

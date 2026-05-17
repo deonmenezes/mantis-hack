@@ -23,8 +23,11 @@
 //! - [`WasmValidator`] — `SandboxRuntime`-backed validator
 //! - [`anthropic::AnthropicAdapter`] — Messages API client (M2.2b)
 //! - [`openai::OpenAIAdapter`] — Chat Completions API client (M2.2b)
+//! - [`claude_cli::ClaudeCliAdapter`] — local `claude` CLI subprocess
+//!   adapter; uses Claude Code's own auth so no API key is needed
 
 pub mod anthropic;
+pub mod claude_cli;
 pub mod openai;
 pub mod retry;
 pub mod symbolic;

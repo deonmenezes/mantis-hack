@@ -96,11 +96,14 @@ enum Command {
 
 #[derive(Subcommand, Debug)]
 enum LlmAction {
-    /// One-shot health check against a provider. The API key comes
-    /// from the environment variable named after the provider
-    /// (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`).
+    /// One-shot health check against a provider. For `anthropic` and
+    /// `openai`, the API key comes from the environment variable
+    /// named after the provider (`ANTHROPIC_API_KEY` or
+    /// `OPENAI_API_KEY`). For `claude-cli`, no key is required —
+    /// the adapter shells out to the local `claude` CLI and reuses
+    /// whatever Claude Code authentication is already configured.
     Probe {
-        /// Provider: `anthropic` or `openai`.
+        /// Provider: `anthropic`, `openai`, or `claude-cli`.
         #[arg(long, default_value = "anthropic")]
         provider: String,
         /// Override the model (defaults to each adapter's default).
@@ -690,7 +693,10 @@ fn build_summary(name: &str, id: &str, target_kind: &TargetKind, info: &Engageme
 }
 
 async fn handle_llm(action: LlmAction) -> Result<()> {
-    use mantis_synthesizer::{anthropic::AnthropicAdapter, openai::OpenAIAdapter, LlmAdapter};
+    use mantis_synthesizer::{
+        anthropic::AnthropicAdapter, claude_cli::ClaudeCliAdapter, openai::OpenAIAdapter,
+        LlmAdapter,
+    };
     match action {
         LlmAction::Probe {
             provider,
@@ -717,7 +723,16 @@ async fn handle_llm(action: LlmAction) -> Result<()> {
                     }
                     adapter.complete(&prompt).await
                 }
-                other => anyhow::bail!("unknown provider `{other}`; supported: anthropic, openai"),
+                "claude-cli" => {
+                    let mut adapter = ClaudeCliAdapter::new();
+                    if let Some(m) = model {
+                        adapter = adapter.with_model(m);
+                    }
+                    adapter.complete(&prompt).await
+                }
+                other => anyhow::bail!(
+                    "unknown provider `{other}`; supported: anthropic, openai, claude-cli"
+                ),
             };
             match result {
                 Ok(text) => {
