@@ -4,8 +4,12 @@
 
 # Mantis
 
+### Ethically hack and discover vulnerabilities in any software with the power of AI.
+
 **Daemon-driven, evidence-grade automated security research.**
 `stalk · wait · strike · hold`
+
+[Quickstart](./quickstart.md) · [The 7-phase FSM](./concepts/fsm.md) · [Install](./install/npm.md) · [Responsible Use](./responsible-use.md) · [GitHub](https://github.com/deonmenezes/mantishack)
 
 </div>
 

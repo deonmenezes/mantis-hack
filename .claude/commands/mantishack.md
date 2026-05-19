@@ -13,7 +13,7 @@ argument-hint: target.com or https://app.example.com/
 ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚══════╝
 
     stalk · wait · strike · hold
-    ethically hack any website with the power of AI
+    ethically hack and discover vulnerabilities in any software with the power of AI
 ```
 
 # `/mantishack`

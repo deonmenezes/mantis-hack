@@ -5,7 +5,7 @@
 # Mantis
 
 `stalk · wait · strike · hold`
-**Ethically hack any website with the power of AI.**
+**Ethically hack and discover vulnerabilities in any software with the power of AI.**
 
 [Quickstart](docs/site/quickstart.md) ·
 [Docs](docs/site/README.md) ·
