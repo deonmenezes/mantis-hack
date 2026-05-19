@@ -590,6 +590,56 @@ impl MantisMcpServer {
         json_ok(&summaries)
     }
 
+    // ----- pure-utility leaf tools (no daemon, no network) -----
+
+    #[tool(
+        description = "Decode a JWT without verifying its signature. Returns header + payload + \
+                       standard-claim extracts (alg, exp, iat, nbf, iss, aud, sub) plus \
+                       `warnings` for dangerous patterns like `alg:none`, missing `exp`, expired \
+                       tokens, and empty signatures. Use this on Authorization headers, \
+                       Set-Cookie tokens, and any base64-looking string suspected of being a JWT. \
+                       Accepts a bare JWT or a `Bearer <jwt>` string. Always returns a result — \
+                       malformed input becomes a structured payload with `warnings` describing \
+                       what went wrong (no client-side retry needed)."
+    )]
+    async fn mantis_decode_jwt(
+        &self,
+        Parameters(args): Parameters<crate::utility_tools::DecodeJwtArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        json_ok(&crate::utility_tools::decode_jwt(&args.jwt))
+    }
+
+    #[tool(
+        description = "Structurally diff two HTTP responses (status + headers + body) and \
+                       classify the divergence: `identical`, `status_changed`, `length_changed`, \
+                       `headers_changed`, `body_changed`, or `mixed`. Also surfaces high-signal \
+                       `markers` — admin/role flags, JWT shapes, error strings, leaked API keys \
+                       (AWS, Stripe, GitHub) — found in one side but not the other. Optimized for \
+                       auth-differential and IDOR work: pass `a` = attacker / unauth response, \
+                       `b` = victim / authed response, then act on the markers."
+    )]
+    async fn mantis_diff_responses(
+        &self,
+        Parameters(args): Parameters<crate::utility_tools::DiffResponsesArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        json_ok(&crate::utility_tools::diff_responses(&args))
+    }
+
+    #[tool(
+        description = "Parse a URL into its components and classify it. Returns scheme, host, \
+                       port, effective_port (defaults: http=80, https=443), path, query, \
+                       fragment, parsed query_params, and `flags` for SSRF / secret-artifact / \
+                       admin-like / cloud-metadata detection. Use as a fast lookup before \
+                       deciding whether a URL is in-scope, points at IMDS / metadata, embeds \
+                       credentials, or targets a secret-exposing path."
+    )]
+    async fn mantis_summarize_url(
+        &self,
+        Parameters(args): Parameters<crate::utility_tools::SummarizeUrlArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        json_ok(&crate::utility_tools::summarize_url(&args.url))
+    }
+
     #[tool(
         description = "Advance the engagement's FSM by one phase. \
                        Pipeline order: RECON -> AUTH -> HUNT -> CHAIN -> VERIFY -> GRADE -> REPORT. \

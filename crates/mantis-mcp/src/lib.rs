@@ -30,4 +30,5 @@
 pub mod daemon;
 pub mod scope;
 pub mod server;
+pub mod utility_tools;
 pub mod wave;
