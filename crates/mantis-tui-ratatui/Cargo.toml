@@ -12,11 +12,14 @@ description = "Ratatui-based terminal renderer for mantis-tui's ScreenModel (PRD
 mantis-tui = { workspace = true }
 ratatui = { workspace = true }
 
-# Prompt-TUI deps: terminal events + async process I/O for the
-# Claude-Code-style `mantis` no-args screen.
+# Prompt-REPL deps: rustyline for the inline Claude-Code-style
+# input loop. crossterm/tokio are kept because the older alt-screen
+# code (still in this crate's git history) might be re-enabled, and
+# because the engagement-dashboard renderer uses ratatui.
 crossterm = "0.28"
 tokio = { workspace = true }
 anyhow = { workspace = true }
+rustyline = "14"
 
 [lints]
 workspace = true

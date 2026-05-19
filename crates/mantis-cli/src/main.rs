@@ -461,14 +461,14 @@ fn main() -> Result<()> {
             // to the first-run setup screen so the user gets wired
             // up before trying again.
             if has_any_ai_cli() {
-                return run_async(mantis_tui_ratatui::prompt::run());
+                return mantis_tui_ratatui::prompt::run();
             }
             setup::run();
             return Ok(());
         }
     };
     match command {
-        Command::Tui => run_async(mantis_tui_ratatui::prompt::run()),
+        Command::Tui => mantis_tui_ratatui::prompt::run(),
         Command::Init {
             plugin_src,
             no_daemon,

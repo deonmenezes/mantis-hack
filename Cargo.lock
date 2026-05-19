@@ -2153,6 +2153,7 @@ dependencies = [
  "mantis-scope",
  "mantis-signup",
  "mantis-synthesizer",
+ "mantis-tui-ratatui",
  "mantis-workspace",
  "serde_json",
  "tokio",
@@ -2658,8 +2659,11 @@ dependencies = [
 name = "mantis-tui-ratatui"
 version = "0.0.1"
 dependencies = [
+ "anyhow",
+ "crossterm",
  "mantis-tui",
  "ratatui",
+ "tokio",
 ]
 
 [[package]]
