@@ -350,8 +350,24 @@ fn spawn_provider(provider: &str, user_prompt: &str) -> Result<()> {
                 .arg("--disallowed-tools=Skill")
                 .arg(&full);
         }
-        _ => {
+        "codex" => {
+            // codex's `-p` is `--profile` (config-profile name), NOT
+            // prompt. The non-interactive prompt form is `codex exec
+            // <prompt>`. Bypass-permissions equivalent.
+            cmd.arg("exec")
+                .arg("--dangerously-bypass-approvals-and-sandbox")
+                .arg(&full);
+        }
+        "opencode" => {
+            // OpenCode's non-interactive form is `opencode run <prompt>`.
+            cmd.arg("run").arg(&full);
+        }
+        "gemini" => {
+            // gemini-cli supports `-p <prompt>` for one-shot mode.
             cmd.arg("-p").arg(&full);
+        }
+        other => {
+            anyhow::bail!("unknown provider `{other}`");
         }
     }
     cmd.stdin(Stdio::null())
