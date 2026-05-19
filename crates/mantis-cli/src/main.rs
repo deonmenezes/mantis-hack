@@ -8,6 +8,7 @@ mod banner;
 mod llm_pick;
 mod model_picker;
 mod project_config;
+mod run_log;
 mod setup;
 
 use anyhow::{Context, Result};
@@ -1528,6 +1529,19 @@ async fn handle_hack(
     eprintln!(
         "[mantishack] handing off to the orchestrator — RECON → AUTH → HUNT → CHAIN → VERIFY → GRADE → REPORT"
     );
+    // Open the markdown command log. Best-effort: a failure to open
+    // (e.g. read-only cwd) just disables logging for this run.
+    let log_path = run_log::pick_log_path(Some(&target_url));
+    let run_log = match run_log::RunLog::open(log_path.clone(), "mantis hack", &target_url) {
+        Ok(l) => {
+            eprintln!("[mantishack] log:       {} (pretty markdown)", log_path.display());
+            Some(l)
+        }
+        Err(e) => {
+            eprintln!("[mantishack] log:       disabled ({e})");
+            None
+        }
+    };
     eprintln!();
 
     let status = run_claude_slash_command(
@@ -1535,8 +1549,17 @@ async fn handle_hack(
         &prompt,
         &preauth_system_prompt,
         &claude_extra_args,
+        run_log.as_ref(),
     )
     .await?;
+    if let Some(log) = &run_log {
+        let label = if status.success() {
+            "success".to_string()
+        } else {
+            format!("exit {status}")
+        };
+        log.finalize(&label);
+    }
 
     if !status.success() {
         anyhow::bail!(
@@ -1832,6 +1855,20 @@ async fn handle_prompt(
 
     if !json_mode {
         eprintln!("[mantis prompt] claude: {}", claude_path.display());
+    }
+    // Open the markdown command log. Best-effort.
+    let target_hint = text.chars().take(40).collect::<String>();
+    let log_path = run_log::pick_log_path(None);
+    let run_log = match run_log::RunLog::open(log_path.clone(), "mantis prompt", &target_hint) {
+        Ok(l) => {
+            if !json_mode {
+                eprintln!("[mantis prompt] log:    {} (pretty markdown)", log_path.display());
+            }
+            Some(l)
+        }
+        Err(_) => None,
+    };
+    if !json_mode {
         eprintln!();
     }
     let status = run_claude_one_shot(
@@ -1840,8 +1877,17 @@ async fn handle_prompt(
         &system_prompt,
         &claude_extra_args,
         json_mode,
+        run_log.as_ref(),
     )
     .await?;
+    if let Some(log) = &run_log {
+        let label = if status.success() {
+            "success".to_string()
+        } else {
+            format!("exit {status}")
+        };
+        log.finalize(&label);
+    }
 
     if !status.success() {
         anyhow::bail!("`claude` exited with status {status}");
@@ -1860,6 +1906,7 @@ async fn run_claude_one_shot(
     append_system_prompt: &str,
     extra_args: &[String],
     json_mode: bool,
+    log: Option<&run_log::RunLog>,
 ) -> Result<std::process::ExitStatus> {
     use tokio::io::AsyncBufReadExt;
 
@@ -1897,12 +1944,22 @@ async fn run_claude_one_shot(
         }
         if json_mode {
             // Pass through raw stream-json — that's the contract for
-            // `--output-format json` scripting.
+            // `--output-format json` scripting. Still record into the
+            // markdown log so the operator gets a human-readable
+            // mirror of the run.
+            if let Some(log) = log {
+                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&line) {
+                    log.record(&ev);
+                }
+            }
             println!("{line}");
             continue;
         }
         match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(event) => {
+                if let Some(log) = log {
+                    log.record(&event);
+                }
                 if let Some(pretty) = format_stream_event(&event) {
                     eprintln!("{pretty}");
                 }
@@ -2529,6 +2586,7 @@ async fn run_claude_slash_command(
     prompt: &str,
     append_system_prompt: &str,
     extra_args: &[String],
+    log: Option<&run_log::RunLog>,
 ) -> Result<std::process::ExitStatus> {
     use tokio::io::AsyncBufReadExt;
 
@@ -2568,6 +2626,9 @@ async fn run_claude_slash_command(
         }
         match serde_json::from_str::<serde_json::Value>(&line) {
             Ok(event) => {
+                if let Some(log) = log {
+                    log.record(&event);
+                }
                 if let Some(pretty) = format_stream_event(&event) {
                     eprintln!("{pretty}");
                 }
