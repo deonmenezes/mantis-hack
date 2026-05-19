@@ -2,7 +2,7 @@
 
 > **Authorized testing only.** See [Responsible Use](../responsible-use.md).
 
-Flexible follow-up to `mantis hack`. Uses the full Mantis stack — every `mcp__mantis__*` tool, every spawned sub-agent, the egress proxy, the Merkle log — but **without** the rigid 7-phase FSM. Use it to dig into a single finding, audit a code file, or chase a hunch.
+Flexible variant of `mantis hack` that takes any subject — URL, file, or prompt — and **drives the full 7-phase FSM** with that subject as priority investigation context. Falls back to a read-only static investigation when no live target / no auth is present.
 
 ## Synopsis
 
@@ -10,31 +10,43 @@ Flexible follow-up to `mantis hack`. Uses the full Mantis stack — every `mcp__
 mantis investigate <subject> [--i-have-authorization] [OPTIONS] [-- <claude args>...]
 ```
 
-`<subject>` auto-classifies into one of three modes:
+`<subject>` auto-classifies into one of three subject types, then the resolver decides whether to drive the FSM or run a read-only static investigation:
 
-| Subject | Mode | Auth required? |
-|---|---|---|
-| `https://…` or `http://…` | **URL** — offensive investigation; runs `mantis_http_scan` probes | yes (`--i-have-authorization`) |
-| Path to a file that exists on disk | **File** — static analysis; the file content is embedded in the prompt (capped at 64 KB) | no |
-| Anything else | **Prompt** — free-form; orchestrator decides what to do | no |
+| Subject | Subject type | Target URL? | With `--i-have-authorization` | Without |
+|---|---|---|---|---|
+| `https://…` / `http://…` | **URL** | itself | **FSM** drives the engagement | hard-fails (refuses) |
+| Path to an existing file | **File** | first URL found in the file body, if any | **FSM** with file as priority context | static read-only |
+| Anything else | **Prompt** | first URL found in the prompt text, if any | **FSM** with the question as priority context | static read-only |
+
+When the FSM fires, it is the same orchestrator role body and gates that `mantis hack` uses (RECON → AUTH → HUNT → CHAIN → VERIFY → GRADE → REPORT) — including the parallel hunter fan-out, the 3-round verifier cascade, and the `adjudication_plan_hash` binding. The only difference is that the operator's investigation seed is inlined as priority context in the system prompt: hunter briefs weight it, chain-builder searches for chains that confirm or refute it, the grader foregrounds findings that bear on it.
+
+When the FSM does **not** fire (no target URL, or auth flag missing on a file/prompt with an embedded URL), `mantis investigate` falls back to a read-only mode that uses MCP read tools (`mantis_read_findings`, `mantis_read_chain_attempts`, …) + `Read` / `Grep` and the leaf utility tools, but issues no HTTP traffic and creates no engagement.
 
 ## Examples
 
-### Investigate a specific URL
+### Investigate a specific URL (FSM)
 
 ```sh
 mantis investigate https://app.example.com/api/users/42 --i-have-authorization
 ```
 
-Orchestrator will summarize the URL, probe it live, spawn a hunter if needed, and report anything worth elevating into a real finding.
+Drives the full FSM with that URL as the engagement target. RECON enumerates the surface, AUTH captures profiles, HUNT spawns hunters (at least one rooted at `/api/users/42`), CHAIN composes findings, the 3-round VERIFY cascade re-proves them, GRADE scores, REPORT renders.
 
-### Audit a suspicious file
+### Audit a file that references a URL (FSM)
+
+```sh
+mantis investigate ./suspicious-finding.md --i-have-authorization
+```
+
+If the file mentions `https://app.example.com/…`, the FSM fires against that target with the file body inlined as priority context. Hunter briefs cross-reference the file's claims against the live surface.
+
+### Static-only audit (no URL in file)
 
 ```sh
 mantis investigate ./src/auth/session.ts
 ```
 
-Static-analysis pass: looks for hardcoded secrets, unsafe patterns, broken auth checks, missing input validation, SQL-injection / SSRF / RCE primitives, mass-assignment risks. Reports ranked findings.
+No target URL → static read-only pass: looks for hardcoded secrets, unsafe patterns, broken auth checks, missing input validation, SQL injection / SSRF / RCE primitives, mass-assignment risks. Reports ranked findings.
 
 ### Chase a hunch about an existing engagement
 
@@ -42,13 +54,15 @@ Static-analysis pass: looks for hardcoded secrets, unsafe patterns, broken auth 
 mantis investigate "the IDOR finding F-3 — does it actually compose into ATO via OAuth state confusion?"
 ```
 
-The orchestrator reads `mantis_read_findings`, walks the chain attempts, decides whether the hypothesis holds up, and reports concretely.
+No URL → static read-only path. The orchestrator reads `mantis_read_findings`, walks chain attempts, and reports whether the hypothesis holds.
 
-### Bundle with a file path inside a prompt
+### Investigate a hunch about a live target (FSM)
 
 ```sh
-mantis investigate "look at ./reports/foo/findings.jsonl and tell me what's most worth verifying first"
+mantis investigate "F-3 looks like ATO via state confusion against https://oauth.example.com/callback" --i-have-authorization
 ```
+
+URL is extracted from the prompt → FSM drives against `https://oauth.example.com/callback` with the hunch as priority context.
 
 ## Options
 
@@ -76,9 +90,9 @@ The investigator system prompt enumerates every tool and agent:
 
 **What it WON'T do:**
 
-- Drive the 7-phase FSM (no `mantis_create_engagement`, no `mantis_authorize_scope`, no `mantis_transition_phase`). For that, use [`mantis hack`](./hack.md).
-- Shell out to `mantis hack` / `mantis pentest` (anti-recursion guard — `mantis` spawned the running `claude`).
-- Issue offensive HTTP traffic in `file` or `prompt` mode.
+- Shell out to `mantis hack` / `mantis investigate` / `mantis pentest` (anti-recursion guard — `mantis` spawned the running `claude`).
+- Issue offensive HTTP traffic in static mode (no target / no auth).
+- Skip the FSM when a target + auth are both present — this is the point of `mantis investigate`, not the exception.
 
 ## Inside the REPL
 

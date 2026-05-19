@@ -2019,10 +2019,25 @@ fn classify_subject(raw: &str) -> InvestigateSubject {
     InvestigateSubject::Prompt(trimmed.to_string())
 }
 
-/// `mantis investigate <subject>` — flexible follow-up to `mantis
-/// hack`. Uses the full Mantis stack (MCP, sub-agents, egress
-/// proxy, Merkle log) but without the strict 7-phase FSM, so it can
-/// dig into a single finding, a code file, or a free-form question.
+/// `mantis investigate <subject>` — flexible variant of `mantis
+/// hack` that takes a URL, a file, or a free-form prompt and runs
+/// the full 7-phase Mantis FSM with the subject as priority
+/// investigation context.
+///
+/// Flow:
+///
+///   1. Classify the subject (URL / file / prompt).
+///   2. Extract a target URL from it (URL: itself; file: first URL
+///      found in the body; prompt: first URL found in the text).
+///   3. If we have a target_url AND --i-have-authorization →
+///      **drive the full FSM** (RECON → AUTH → HUNT → CHAIN →
+///      VERIFY → GRADE → REPORT), the same orchestrator role body
+///      `mantis hack` uses, with the subject body inlined as
+///      priority context so the spawned hunters know which finding
+///      / file / hunch to dig into first.
+///   4. Otherwise → read-only investigation. No FSM, no scope
+///      manifest, no live HTTP. The orchestrator uses MCP read
+///      tools and `Read` / `Grep` to answer.
 async fn handle_investigate(
     subject: String,
     i_have_authorization: bool,
@@ -2037,23 +2052,50 @@ async fn handle_investigate(
     }
 
     let classified = classify_subject(&subject);
-    // Auth gate: only the URL variant issues offensive traffic.
+    let extracted_target = extract_first_url(&classified);
+    let drives_fsm = extracted_target.is_some() && i_have_authorization;
+
+    // URL subject without auth is always a hard fail — it's offensive
+    // by construction.
     if matches!(classified, InvestigateSubject::Url(_)) && !i_have_authorization {
         anyhow::bail!(
             "refusing to start: `mantis investigate <url>` issues HTTP probes against the target.\n\
              Re-run with --i-have-authorization once you have written permission."
         );
     }
+    // File / prompt with embedded URL but no auth: drop to static
+    // mode and let the operator know.
+    if extracted_target.is_some() && !i_have_authorization && !json_mode {
+        eprintln!(
+            "[mantis investigate] target URL detected but --i-have-authorization not set; \
+             dropping to read-only static investigation"
+        );
+    }
 
-    // Pre-flight: parallel claude + mantis-mcp resolution.
+    // Pre-flight: parallel claude + mantis-mcp resolution + (when
+    // driving the FSM) daemon-up check.
     let daemon_for_task = daemon.clone();
     let claude_bin_for_task = claude_bin.clone();
-    let (claude_res, mcp_bin_res) = tokio::join!(
+    let (claude_res, mcp_bin_res, daemon_res) = tokio::join!(
         tokio::task::spawn_blocking(move || resolve_claude_binary(claude_bin_for_task.as_deref())),
         tokio::task::spawn_blocking(|| which_bin("mantis-mcp")),
+        {
+            let daemon = daemon.clone();
+            tokio::task::spawn_blocking(move || {
+                if drives_fsm {
+                    ensure_daemon_for_hack(&daemon).map(|_| true)
+                } else {
+                    // Best-effort — we still want MCP tools to work
+                    // for read-only investigation, but don't fail if
+                    // the daemon is down.
+                    Ok(daemon_is_up(&daemon))
+                }
+            })
+        },
     );
     let claude_path = claude_res.context("spawn_blocking(claude-resolve)")??;
     let mcp_bin = mcp_bin_res.context("spawn_blocking(mantis-mcp lookup)")?;
+    let daemon_up = daemon_res.context("spawn_blocking(daemon-check)")??;
     if mcp_bin.is_some() {
         let claude_path_for_task = claude_path.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -2071,17 +2113,28 @@ async fn handle_investigate(
 
     let claude_extra_args = apply_model_preference(claude_extra_args, false);
 
-    // Build the investigator prompt — per subject variant.
-    let (subject_label, user_prompt, append_system_prompt) =
-        build_investigator_prompts(&classified, i_have_authorization);
+    // Build the prompts. The FSM path inlines the same orchestrator
+    // role body `mantis hack` uses; the static path uses a leaner
+    // read-only investigator prompt.
+    let (subject_label, user_prompt, append_system_prompt) = if drives_fsm {
+        let target_url = normalize_target_url(extracted_target.as_deref().unwrap_or(""));
+        build_fsm_investigator_prompts(&target_url, &classified)
+    } else {
+        build_static_investigator_prompts(&classified)
+    };
 
     if !json_mode {
         eprintln!("[mantis investigate] subject: {subject_label}");
         eprintln!("[mantis investigate] claude:  {}", claude_path.display());
+        eprintln!("[mantis investigate] daemon:  {} ({})", daemon, if daemon_up { "up" } else { "down" });
+        eprintln!(
+            "[mantis investigate] mode:    {}",
+            if drives_fsm { "FSM (RECON → AUTH → HUNT → CHAIN → VERIFY → GRADE → REPORT)" } else { "static (read-only)" }
+        );
     }
 
     // Open the markdown run log so every claude command is captured.
-    let log_path = run_log::pick_log_path(None);
+    let log_path = run_log::pick_log_path(extracted_target.as_deref());
     let run_log = match run_log::RunLog::open(log_path.clone(), "mantis investigate", &subject_label) {
         Ok(l) => {
             if !json_mode {
@@ -2095,15 +2148,29 @@ async fn handle_investigate(
         eprintln!();
     }
 
-    let status = run_claude_one_shot(
-        &claude_path,
-        &user_prompt,
-        &append_system_prompt,
-        &claude_extra_args,
-        json_mode,
-        run_log.as_ref(),
-    )
-    .await?;
+    // Driving the FSM uses run_claude_slash_command (Skill tool
+    // disallowed, mirrors mantis hack). Static mode uses the
+    // one-shot path with json/text streaming.
+    let status = if drives_fsm {
+        run_claude_slash_command(
+            &claude_path,
+            &user_prompt,
+            &append_system_prompt,
+            &claude_extra_args,
+            run_log.as_ref(),
+        )
+        .await?
+    } else {
+        run_claude_one_shot(
+            &claude_path,
+            &user_prompt,
+            &append_system_prompt,
+            &claude_extra_args,
+            json_mode,
+            run_log.as_ref(),
+        )
+        .await?
+    };
     if let Some(log) = &run_log {
         let label = if status.success() {
             "success".to_string()
@@ -2115,143 +2182,226 @@ async fn handle_investigate(
     if !status.success() {
         anyhow::bail!("`claude` exited with status {status}");
     }
+    if drives_fsm && !json_mode {
+        eprintln!();
+        eprintln!("[mantis investigate] investigation returned cleanly.");
+        print_post_run_summary();
+    }
     Ok(())
 }
 
-/// Build the (subject_label, user_prompt, system_prompt) triple for
-/// the investigator. The system prompt enumerates available tools
-/// and agents and tells the orchestrator how to investigate; the
-/// user prompt is what gets handed to `claude --print` as the
-/// question.
-fn build_investigator_prompts(
-    s: &InvestigateSubject,
-    i_have_authorization: bool,
-) -> (String, String, String) {
-    let common_system = r#"You are running under `mantis investigate` — a flexible Mantis-driven \
-investigation surface. You have access to the full Mantis MCP server (every \
-`mcp__mantis__*` tool) and may spawn any of the specialized sub-agents via the \
-`Task` tool:
-
-  recon-agent              — surface enumeration
-  deep-recon-agent         — script-heavy recon + surface-lead promotion
-  surface-router-agent     — capability-pack routing per surface
-  hunter-agent             — web-surface hunter
-  hunter-evm-agent         — EVM smart-contract hunter
-  hunter-svm-agent         — Solana hunter
-  hunter-move-agent        — Aptos + Sui Move hunter
-  hunter-substrate-agent   — Substrate / ink! hunter
-  hunter-cosmwasm-agent    — CosmWasm hunter
-  chain-builder            — multi-step exploit chain construction
-  brutalist-verifier       — skeptic verifier (round 1)
-  balanced-verifier        — false-negative catcher (round 2)
-  final-verifier           — fresh re-run + adjudication-plan-hash gate
-  evidence-agent           — pre-grade evidence pack assembly
-  grader                   — 5-axis scoring → SUBMIT/HOLD/SKIP
-  report-writer            — disclosure-ready report rendering
-
-Pure-utility leaf tools you should reach for on raw evidence:
-
-  mantis_decode_jwt        — JWT triage (alg:none, exp, signature)
-  mantis_diff_responses    — structural HTTP response diff + markers
-  mantis_summarize_url     — URL parse + SSRF / IMDS / admin / secret-path flags
-  mantis_extract_secrets   — AWS / GitHub / Stripe / Slack / OpenAI / etc token scan
-  mantis_extract_html_forms — form parser + CSRF / mass-assignment buckets
-  mantis_extract_links     — endpoint + host discovery from blobs
-  mantis_hash_request      — stable request hash for dedup
-  mantis_score_finding     — pre-grader using the 5-axis rubric
-
-RULES for this session:
-
-* Do NOT shell out to `mantis hack`, `mantis pentest`, or any other `mantis` CLI
-  via Bash — the `mantis` binary spawned YOU; recursion would infinite-loop. Use
-  MCP tools and Task spawns only.
-* You are NOT driving the 7-phase FSM here. No `mantis_create_engagement`, no
-  `mantis_authorize_scope`, no `mantis_transition_phase`. This is an
-  investigation surface — read, reason, spawn agents, report. If the
-  investigation reveals work that needs a real FSM run, tell the user to launch
-  `mantis hack <target> --i-have-authorization`.
-* When you uncover a candidate finding, call `mantis_score_finding(...)` first
-  and only report it as a real finding if the verdict is SUBMIT.
-* Be thorough but bounded — when you've gathered enough evidence to answer the
-  user's question with high confidence, stop and report. Don't keep mining if
-  the answer is in hand.
-* Report findings inline (not in JSON unless asked). Use markdown for
-  structure. If you produce a final recommendation, lead with it.
-"#;
-
+/// Extract the first URL-shaped substring from a subject. For
+/// `InvestigateSubject::Url`, returns the URL itself; for `File`,
+/// scans the body; for `Prompt`, scans the text.
+fn extract_first_url(s: &InvestigateSubject) -> Option<String> {
     match s {
-        InvestigateSubject::Url(url) => {
-            let auth_note = if i_have_authorization {
-                "AUTHORIZED: the operator confirmed written authorization for this target via --i-have-authorization."
-            } else {
-                "NOT AUTHORIZED: do not issue offensive HTTP traffic. Limit to passive reasoning only."
-            };
-            let user = format!(
-                "Investigate this URL carefully: `{url}`\n\n\
-                 Context: the operator wants to know what's worth probing here, what \
-                 vulnerabilities may exist, and whether any specific findings already \
-                 hypothesized about this URL hold up under closer inspection. Use:\n\n\
-                 - `mantis_summarize_url` to classify the URL (admin-like? secret-artifact path? IMDS-shaped?)\n\
-                 - `mantis_http_scan` (with target_domain) to probe the surface live\n\
-                 - `mantis_extract_links` / `mantis_extract_html_forms` on responses to map further surface\n\
-                 - `mantis_decode_jwt` / `mantis_extract_secrets` on auth headers and response bodies\n\
-                 - `Task(subagent_type=hunter-agent, ...)` for a focused per-surface hunt\n\
-                 - `mantis_diff_responses` for auth-differential proofs (attacker vs victim)\n\
-                 - `mantis_score_finding` before reporting any candidate finding\n\n\
-                 Report your investigation as you go: what you tried, what you found, what's left."
-            );
-            let sys = format!(
-                "{common_system}\n\nINVESTIGATION TARGET TYPE: url\n{auth_note}\n"
-            );
-            (format!("url:{url}"), user, sys)
-        }
+        InvestigateSubject::Url(u) => Some(u.clone()),
+        InvestigateSubject::File { body, .. } => first_url_in_text(body),
+        InvestigateSubject::Prompt(text) => first_url_in_text(text),
+    }
+}
+
+/// Return the first `http://` or `https://` URL in `text`, stripped
+/// of trailing punctuation common to prose contexts.
+fn first_url_in_text(text: &str) -> Option<String> {
+    let lowered = text.to_ascii_lowercase();
+    let start = lowered.find("https://").or_else(|| lowered.find("http://"))?;
+    let rest = &text[start..];
+    let end = rest
+        .find(|c: char| {
+            c.is_whitespace()
+                || matches!(c, '"' | '\'' | '`' | '<' | '>' | ')' | ',' | ';' | '\\')
+        })
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(|c: char| matches!(c, '.' | '!' | '?'));
+    if url.len() <= 8 {
+        None
+    } else {
+        Some(url.to_string())
+    }
+}
+
+/// Build the (subject_label, user_prompt, system_prompt) triple for
+/// the FSM-driving path. Mirrors `mantis hack`'s system+prompt
+/// structure, but inlines the operator's investigation seed
+/// (URL / file body / prompt) as priority context the orchestrator
+/// must thread through to spawned hunters.
+fn build_fsm_investigator_prompts(
+    target_url: &str,
+    classified: &InvestigateSubject,
+) -> (String, String, String) {
+    // Reuse the same orchestrator role body and argument format
+    // mantis hack uses — we want the FSM-driving behavior to be
+    // identical except for the priority context we inject below.
+    let arguments = build_orchestrator_arguments(target_url, /* deep */ false, /* no_auth */ false, "default");
+    let orchestrator_body = orchestrator_role_body(&arguments);
+
+    let (label, priority_block) = match classified {
+        InvestigateSubject::Url(url) => (
+            format!("url:{url}"),
+            format!(
+                "The operator opened this investigation specifically to dig into the URL \
+                 `{url}`. The orchestrator's RECON / AUTH / HUNT phases should weight that \
+                 path heavily — wave fan-out must include at least one hunter whose surface \
+                 brief is rooted at or under this URL."
+            ),
+        ),
         InvestigateSubject::File { path, body, truncated } => {
-            let trunc_note = if *truncated {
-                "\n(NOTE: file content was truncated at 64 KB. Use Read tool on the path for the full file.)"
-            } else {
-                ""
-            };
-            let user = format!(
-                "Investigate this file carefully: `{}`\n\n\
-                 The file content is embedded below (capped at 64 KB).{trunc_note} Use:\n\n\
-                 - `Read`, `Grep`, `Glob` to walk the surrounding repo if useful\n\
-                 - `mantis_extract_secrets` to scan for leaked credentials inline\n\
-                 - `mantis_extract_links` to find URLs / endpoints / hosts referenced\n\
-                 - `mantis_summarize_url` on any URL you discover\n\
-                 - `Task(subagent_type=hunter-agent, ...)` only if the file points at a live target the operator is authorized to test\n\n\
-                 Look for: hardcoded secrets, unsafe patterns, broken auth checks, \
-                 missing input validation, SQL injection / SSRF / RCE primitives, \
-                 untrusted-input → privileged-action sinks, mass-assignment risks, \
-                 unsanitized renders. Report what you found, ranked by severity. \
-                 Tell the user concretely what to do next.\n\n\
-                 === FILE: {} ===\n\n```\n{body}\n```\n",
-                path.display(),
-                path.display()
-            );
-            let sys = format!(
-                "{common_system}\n\nINVESTIGATION TARGET TYPE: file ({})\nThis is a static analysis pass — do not issue HTTP probes.\n",
-                path.display()
-            );
-            (format!("file:{}", path.display()), user, sys)
+            let trunc = if *truncated { "\n(NOTE: file content was truncated at 64 KB.)" } else { "" };
+            (
+                format!("file:{}", path.display()),
+                format!(
+                    "The operator opened this investigation around a specific file: `{}`. \
+                     The file body is included below — treat it as priority static-analysis \
+                     context. Cross-reference its imports, endpoints, and patterns with the \
+                     RECON output and steer hunter briefs toward the surfaces this file touches.{trunc}\n\n\
+                     === FILE: {} ===\n\n```\n{body}\n```\n",
+                    path.display(),
+                    path.display(),
+                ),
+            )
+        }
+        InvestigateSubject::Prompt(text) => (
+            format!("prompt:{}", text.chars().take(40).collect::<String>()),
+            format!(
+                "The operator opened this investigation with the following question / hunch:\n\n\
+                 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\
+                 {text}\n\
+                 ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\n\n\
+                 Drive the FSM with this concern as priority context. Hunter briefs must \
+                 reflect it; chain-builder must search for chains that confirm or refute it; \
+                 the grader weights findings against this question when scoring."
+            ),
+        ),
+    };
+
+    let preauth_system_prompt = format!(
+        "Non-interactive invocation by `mantis investigate`.\n\
+         The operator has provided explicit written authorization for the target \
+         `{target_url}` via the `--i-have-authorization` flag at the CLI gate. \
+         The legal authorization gate AND the scope confirmation gate are \
+         PRE-CONFIRMED for this session. Do not ask the user to re-confirm \
+         either gate; the user is not interactive and cannot answer.\n\n\
+         HARD RULES for this session:\n\
+         - Do NOT use the `Skill` tool for anything. It is disabled.\n\
+         - Do NOT shell out to `mantis hack`, `mantis investigate`, `mantis pentest`, or any \
+           other `mantis` CLI command via `Bash`. The `mantis` binary spawned YOU; calling \
+           it again is an infinite loop. Use only `mcp__mantis__*` tools and `Task` spawns \
+           of the named subagents.\n\
+         - The orchestrator role prompt is appended below. Drive the full FSM \
+           (RECON → AUTH → HUNT → CHAIN → VERIFY → GRADE → REPORT). Spawn ≥3 \
+           parallel hunters on every wave even if the surface count is low — the \
+           investigation seed should always get its own dedicated hunter.\n\n\
+         === PRIORITY INVESTIGATION CONTEXT (FROM THE OPERATOR) ===\n\n\
+         {priority_block}\n\n\
+         === ORCHESTRATOR ROLE PROMPT ===\n\n\
+         {orchestrator_body}",
+    );
+
+    let user_prompt = format!(
+        "Authorization granted at the CLI gate for `{target_url}`. \
+         Scope confirmed: `{target_url}`. Both legal and scope gates are \
+         PRE-CONFIRMED — do not re-ask the user.\n\
+         Engagement input ($ARGUMENTS): {arguments}\n\n\
+         This run was launched via `mantis investigate`, not `mantis hack` — \
+         the operator has supplied priority investigation context in the system \
+         prompt above. Make sure every phase respects it: weight RECON toward \
+         the seeded path, ensure HUNT spawns at least one hunter rooted at it, \
+         and have the grader / report-writer foreground findings that bear on \
+         the seeded concern.\n\n\
+         Begin the engagement now. Start with PHASE 1: RECON by calling \
+         `mcp__mantis__mantis_init_session({{ target_domain, target_url, deep_mode }})` \
+         and then spawning the recon agent via the `Task` tool. Drive the full \
+         FSM. Do NOT use Skill. Do NOT shell out to `mantis`."
+    );
+
+    (label, user_prompt, preauth_system_prompt)
+}
+
+/// Build the (subject_label, user_prompt, system_prompt) triple for
+/// the read-only investigation path (no target URL or no auth flag).
+/// Uses MCP read tools + Read / Grep over the working directory.
+fn build_static_investigator_prompts(
+    classified: &InvestigateSubject,
+) -> (String, String, String) {
+    let common_system = "You are running under `mantis investigate` in READ-ONLY mode \
+                         — no target URL was supplied (or no authorization was given), so no \
+                         offensive HTTP traffic will be issued. You have access to the full \
+                         Mantis MCP server (every `mcp__mantis__*` read tool) and may spawn \
+                         specialized sub-agents via `Task` for non-network work.\n\n\
+                         Available pure-utility leaf tools (call them on raw evidence):\n\
+                         - `mantis_decode_jwt`, `mantis_diff_responses`, `mantis_summarize_url`\n\
+                         - `mantis_extract_secrets`, `mantis_extract_html_forms`, `mantis_extract_links`\n\
+                         - `mantis_hash_request`, `mantis_score_finding`\n\n\
+                         RULES:\n\
+                         - Do NOT shell out to `mantis hack` / `mantis investigate` via Bash.\n\
+                         - Do NOT issue offensive HTTP traffic. If you find that you need it, \
+                           tell the user to re-run with `mantis investigate <url> --i-have-authorization`.\n\
+                         - Read existing engagement state via `mantis_read_findings`, \
+                           `mantis_read_chain_attempts`, `mantis_read_verification_round`, \
+                           `mantis_read_http_audit`. Use `Read` / `Grep` / `Glob` on the cwd.\n\
+                         - Lead with the bottom-line answer; back it up with evidence; tell \
+                           the user what to do next.";
+
+    match classified {
+        InvestigateSubject::Url(url) => (
+            format!("url:{url}"),
+            format!(
+                "Investigate this URL passively: `{url}`\n\n\
+                 No authorization was given, so do not issue HTTP probes. \
+                 What you CAN do: parse / classify the URL (`mantis_summarize_url`), \
+                 check existing engagement artifacts for any prior probes against this \
+                 host (`mantis_read_http_audit`, `mantis_read_findings`), and reason \
+                 about likely vulnerabilities given the URL shape and the codebase. \
+                 If a live probe is necessary, tell the user to re-run with `--i-have-authorization`."
+            ),
+            common_system.to_string(),
+        ),
+        InvestigateSubject::File { path, body, truncated } => {
+            let trunc = if *truncated { "\n(NOTE: file content was truncated at 64 KB.)" } else { "" };
+            (
+                format!("file:{}", path.display()),
+                format!(
+                    "Investigate this file carefully: `{}`{trunc}\n\n\
+                     Static analysis only. Use:\n\
+                     - `Read` / `Grep` / `Glob` to walk the surrounding repo\n\
+                     - `mantis_extract_secrets` to scan for leaked credentials\n\
+                     - `mantis_extract_links` to discover referenced URLs / hosts\n\
+                     - `mantis_summarize_url` on every URL you discover\n\n\
+                     Look for: hardcoded secrets, unsafe patterns, broken auth checks, \
+                     missing input validation, SQL injection / SSRF / RCE primitives, \
+                     untrusted-input → privileged-action sinks, mass-assignment risks. \
+                     Report ranked by severity. Tell the user concretely what to do next.\n\n\
+                     === FILE: {} ===\n\n```\n{body}\n```\n",
+                    path.display(),
+                    path.display()
+                ),
+                common_system.to_string(),
+            )
         }
         InvestigateSubject::Prompt(text) => {
-            let user = format!(
-                "Investigate this matter carefully: {text}\n\n\
-                 The user has given you a free-form prompt. Decide what it needs:\n\n\
-                 - If it references a target you should probe live, refuse unless they re-run with `mantis investigate <url> --i-have-authorization`.\n\
-                 - If it references a finding or claim, walk through evidence on disk (`Read` / `Grep`) and via MCP read tools (`mantis_read_findings`, `mantis_read_chain_attempts`, `mantis_read_verification_round`).\n\
-                 - If it's a question about the codebase or about an existing engagement, answer from the artifacts available.\n\
-                 - Spawn specialized sub-agents only if the work clearly fits one of them.\n\n\
-                 Lead with the bottom-line answer; back it up with evidence; tell the user what to do next."
-            );
-            let sys = format!(
-                "{common_system}\n\nINVESTIGATION TARGET TYPE: free-form prompt\nNo target is implied — do not issue offensive HTTP traffic unless the user explicitly authorizes a specific URL.\n"
-            );
             let label = text.chars().take(40).collect::<String>();
-            (format!("prompt:{label}"), user, sys)
+            (
+                format!("prompt:{label}"),
+                format!(
+                    "Investigate this matter carefully: {text}\n\n\
+                     Free-form prompt — no target URL was extracted. Decide what's needed:\n\
+                     - If it references an existing engagement / finding, walk the artifacts \
+                       on disk (`Read` / `Grep`) and via MCP read tools \
+                       (`mantis_read_findings`, `mantis_read_chain_attempts`, \
+                       `mantis_read_verification_round`).\n\
+                     - If it's a question about the codebase, answer from the artifacts available.\n\
+                     - If it references a target that should be probed live, refuse and tell \
+                       the user to re-run with `mantis investigate <url> --i-have-authorization`.\n\n\
+                     Lead with the bottom-line answer; back it up with evidence; tell the \
+                     user what to do next."
+                ),
+                common_system.to_string(),
+            )
         }
     }
 }
+
 
 /// Like [`run_claude_slash_command`] but for the `mantis prompt`
 /// surface: skips `--disallowed-tools Skill` (the prompt path
