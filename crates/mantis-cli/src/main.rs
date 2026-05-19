@@ -7,6 +7,7 @@
 mod banner;
 mod llm_pick;
 mod model_picker;
+mod project_config;
 mod setup;
 
 use anyhow::{Context, Result};
@@ -1512,8 +1513,9 @@ async fn handle_hack(
 /// honoring (in priority order, claude-code / claw-code style):
 ///   1. user-supplied `-- --model …` / `-m …` (wins — leave untouched)
 ///   2. `MANTIS_MODEL` env var (per-shell override)
-///   3. `~/.Mantis/model` (persistent — set via `mantis model`)
-///   4. `--turbo` default (Opus, only when nothing else fires)
+///   3. `.mantis.json` `model` key (per-repo)
+///   4. `~/.Mantis/model` (persistent — set via `mantis model`)
+///   5. `--turbo` default (Opus, only when nothing else fires)
 fn apply_model_preference(claude_extra_args: Vec<String>, turbo: bool) -> Vec<String> {
     if claude_extra_args
         .iter()
@@ -1526,8 +1528,16 @@ fn apply_model_preference(claude_extra_args: Vec<String>, turbo: bool) -> Vec<St
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let project_model = project_config::load()
+        .ok()
+        .flatten()
+        .and_then(|(_, cfg)| cfg.model)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let (model_id, source) = if let Some(env_id) = env_model {
         (env_id, "from $MANTIS_MODEL env var")
+    } else if let Some(proj) = project_model {
+        (proj, "from .mantis.json")
     } else if let Some(saved) = model_picker::load_saved() {
         (saved, "from `mantis model`")
     } else if turbo {
@@ -1760,10 +1770,18 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let project_cfg = project_config::load().ok().flatten();
+    let project_model = project_cfg
+        .as_ref()
+        .and_then(|(_, c)| c.model.clone())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     // Effective model resolution mirrors apply_model_preference:
-    // env > saved > none. (User's -- --model flag is per-run only.)
+    // env > .mantis.json > ~/.Mantis/model > none.
     let (effective_model, effective_source) = if let Some(m) = env_model.as_ref() {
         (Some(m.clone()), "MANTIS_MODEL env")
+    } else if let Some(m) = project_model.as_ref() {
+        (Some(m.clone()), ".mantis.json")
     } else if let Some(m) = saved_model.as_ref() {
         (Some(m.clone()), "~/.Mantis/model")
     } else {
@@ -1815,9 +1833,11 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
                 "effective_source": effective_source,
                 "saved": saved_model,
                 "env": env_model,
+                "project": project_model,
                 "file": mantis_home.as_ref().map(|d| d.join("model").display().to_string()),
-                "resolution_order": ["cli --model flag", "MANTIS_MODEL env", "~/.Mantis/model", "claude default"],
+                "resolution_order": ["cli --model flag", "MANTIS_MODEL env", ".mantis.json", "~/.Mantis/model", "claude default"],
             },
+            "project_config": project_cfg.as_ref().map(|(p, _)| p.display().to_string()),
             "mantis_home": mantis_home.as_ref().map(|p| p.display().to_string()),
         });
         println!("{}", serde_json::to_string_pretty(&v)?);
@@ -1871,9 +1891,17 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
         env_model.as_deref().unwrap_or("(unset)")
     );
     println!(
+        "    .mantis.json:     {}",
+        project_model.as_deref().unwrap_or("(no model key)")
+    );
+    println!(
         "    saved file:       {}",
         saved_model.as_deref().unwrap_or("(empty)")
     );
+    if let Some((p, _)) = &project_cfg {
+        println!();
+        println!("  project config:   {}", p.display());
+    }
     if let Some(h) = &mantis_home {
         println!();
         println!("  ~/.Mantis:       {}", h.display());
