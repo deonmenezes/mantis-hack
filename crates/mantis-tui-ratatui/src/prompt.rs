@@ -226,6 +226,7 @@ fn print_help() {
     println!("  {MINT}/model{RESET} [id|clear]  open the Tab/Shift+Tab picker, set a model, or clear it");
     println!("  {MINT}/version{RESET}           print the mantis version");
     println!("  {MINT}/init{RESET}              re-wire plugin + MCP + daemon");
+    println!("  {MINT}/init-project{RESET}      scaffold .mantis.json + MANTIS.md in cwd");
     println!("  {MINT}/hack <target>{RESET}     `mantis hack <target> --i-have-authorization`");
     println!("  {DIM}—— meta ——{RESET}");
     println!("  {MINT}/help{RESET}              this list");
@@ -259,6 +260,15 @@ fn handle_slash(cmd: &str, active: &mut String, providers: &[String]) -> bool {
         ["status", rest @ ..] => run_mantis_subcommand(&["status"], rest),
         ["version", rest @ ..] => run_mantis_subcommand(&["version"], rest),
         ["init", rest @ ..] => run_mantis_subcommand(&["init"], rest),
+        ["init-project", rest @ ..] => {
+            // Project-only scaffold: skip the global wiring so we
+            // never re-spawn the daemon / re-register MCP just to
+            // create files. `--no-plugin --no-mcp --no-daemon` makes
+            // `mantis init --project` a pure scaffold.
+            let mut argv = vec!["init", "--project", "--no-plugin", "--no-mcp", "--no-daemon"];
+            argv.extend_from_slice(rest);
+            run_mantis_subcommand_argv(&argv);
+        }
         ["model"] => run_mantis_subcommand(&["model"], &[]),
         ["model", "clear"] => run_mantis_subcommand(&["model", "clear"], &[]),
         ["model", "show"] => run_mantis_subcommand(&["model", "show"], &[]),
