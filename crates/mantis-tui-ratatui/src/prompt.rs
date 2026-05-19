@@ -73,7 +73,13 @@ pub fn run() -> Result<()> {
     }
 
     loop {
-        let prompt = format!("{MINT}{BOLD}❯{RESET} ");
+        // Visually fence each input with a double horizontal line
+        // (═ — U+2550) above the prompt. Width follows the terminal
+        // so the rule spans the full screen; falls back to 80 if
+        // the terminal size lookup fails.
+        let width = terminal_width().unwrap_or(80);
+        let rule: String = "═".repeat(width);
+        let prompt = format!("{DIM}{rule}{RESET}\n{MINT}{BOLD}❯{RESET} ");
         match rl.readline(&prompt) {
             Ok(line) => {
                 let line = line.trim();
@@ -245,6 +251,14 @@ fn history_path() -> Option<PathBuf> {
     let dir = PathBuf::from(home).join(".Mantis");
     let _ = std::fs::create_dir_all(&dir);
     Some(dir.join("repl-history"))
+}
+
+/// Read the current terminal width in columns. Returns `None` when
+/// not connected to a TTY (e.g. piped). Uses crossterm so we don't
+/// add another dep — crossterm is already in this crate's Cargo.toml
+/// for the alt-screen renderer.
+fn terminal_width() -> Option<usize> {
+    crossterm::terminal::size().ok().map(|(w, _)| w as usize)
 }
 
 fn which_bin(name: &str) -> Option<PathBuf> {
