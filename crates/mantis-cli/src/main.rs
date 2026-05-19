@@ -1351,10 +1351,29 @@ async fn handle_hack(
         );
     }
 
+    // Pull per-repo defaults from `.mantis.json` (if any). CLI flags
+    // beat them; project config beats global defaults. Egress is
+    // string-typed so we only override when the user kept the
+    // default "default" value.
+    let project_cfg = project_config::load().ok().flatten();
+    let project_deep = project_cfg.as_ref().and_then(|(_, c)| c.deep).unwrap_or(false);
+    let project_no_auth = project_cfg.as_ref().and_then(|(_, c)| c.no_auth).unwrap_or(false);
+    let project_egress = project_cfg.as_ref().and_then(|(_, c)| c.egress.clone());
+    if let Some((path, _)) = &project_cfg {
+        eprintln!("[mantishack] config:    {}", path.display());
+    }
+
     // `--turbo` is a preset: deep recon + Opus model when no other
     // preference exists. Resolved here so the rest of the function
-    // sees the post-preset values.
-    let deep = deep || turbo;
+    // sees the post-preset values. CLI deep / no_auth / egress beat
+    // the project config; otherwise the project values fill in.
+    let deep = deep || turbo || project_deep;
+    let no_auth = no_auth || project_no_auth;
+    let egress = if egress == "default" {
+        project_egress.unwrap_or(egress)
+    } else {
+        egress
+    };
     if turbo {
         eprintln!("[mantishack] turbo: deep recon + Opus model preset");
     }
