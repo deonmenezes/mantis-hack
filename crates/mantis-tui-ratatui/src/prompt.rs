@@ -17,13 +17,19 @@
 //! Ctrl-C clears the current input line (matches readline norms).
 //! Ctrl-D / EOF exits.
 
-use std::io::{self, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use serde_json::Value;
 
 // ANSI escape codes. We render the header + inline status hints
 // directly instead of going through ratatui — the whole point of
@@ -45,6 +51,49 @@ const MASCOT: &[&str] = &[
 ];
 
 const PROVIDERS: &[&str] = &["claude", "codex", "opencode", "gemini"];
+
+// Rotating verb pool for the spinner message — playful synonyms that
+// fit Mantis's "stalk · wait · strike · hold" tagline. Cycled every
+// ~2 seconds while a provider is running, matching the Claude Code
+// rhythm ("Garnishing…" / "Thinking more" / etc.).
+const VERBS: &[&str] = &[
+    "Stalking",
+    "Hunting",
+    "Reconning",
+    "Scoping",
+    "Probing",
+    "Striking",
+    "Plotting",
+    "Pondering",
+    "Brewing",
+    "Calculating",
+    "Investigating",
+    "Tracking",
+    "Lurking",
+    "Sniffing",
+    "Pivoting",
+    "Decoding",
+    "Hypothesizing",
+    "Cross-checking",
+];
+
+// Mantis-flavored tips shown above the spinner when a spawn starts.
+// One is picked at pseudo-random per spawn — keeps the operator
+// trickle-learning the tool's surface.
+const TIPS: &[&str] = &[
+    "/provider <name> switches between claude / codex / opencode / gemini mid-session",
+    "Mantis enforces scope cryptographically at the egress proxy — the legal gate is yours",
+    "hunters fan out ≥3 in parallel for every wave, even on a 1-surface target",
+    "Ctrl-D exits cleanly; Ctrl-C just clears the current input line",
+    "all Mantis testing requires written authorization from the target owner",
+    "try `mantis hack <target> --i-have-authorization` for the full 7-phase FSM",
+    "REPL history persists at ~/.Mantis/repl-history across sessions",
+    "the 3-round verifier cascade catches false positives the brutalist round misses",
+    "every state change becomes a BLAKE3 leaf in the per-engagement Merkle log",
+    "render reports in 6 formats: markdown, pdf, hackerone, bugcrowd, sarif, openvex",
+    "use `mantis goal \"find idor\"` for goal-directed multi-wave engagements",
+    "the orchestrator never sends target HTTP itself — that's the hunters' job",
+];
 
 /// Entry point. Sync — readline is a blocking call and the
 /// subprocess spawn uses std::process, so the whole loop runs on
@@ -206,18 +255,76 @@ fn build_full_prompt(user_prompt: &str) -> String {
     )
 }
 
-/// Spawn `<provider> -p "<prompt>"` with stdio inherited so output
-/// flows to the operator's normal terminal scrollback. Blocks until
-/// the child exits; returns its exit code.
+/// Spawn the selected AI CLI with a spinner + live event preview.
+///
+/// For `claude`, switch to `--output-format stream-json` so we get a
+/// structured event stream — every tool call, sub-agent spawn, MCP
+/// call, and assistant text block lands on its own JSON line. We
+/// parse each event and pretty-print it above an indicatif spinner
+/// whose message rotates through Mantis-flavored verbs ("Stalking",
+/// "Hunting", …) and shows elapsed time.
+///
+/// Other providers (codex / opencode / gemini) don't have a common
+/// structured-output mode; they use plain `-p` with stdio inherited
+/// and just get the spinner shell.
 fn spawn_provider(provider: &str, user_prompt: &str) -> Result<()> {
     let full = build_full_prompt(user_prompt);
-    println!("{DIM}↳ {provider} -p ...{RESET}");
-    let _ = io::stdout().flush();
+
+    // Pick + show a tip above the spinner.
+    println!("{DIM}✦ tip: {}{RESET}", pick_tip());
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::with_template("  {spinner:.green} {msg}")
+            .unwrap()
+            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
+    );
+    pb.enable_steady_tick(Duration::from_millis(80));
+
+    let start = Instant::now();
+    let last_tool: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
+
+    // Background ticker: rotate the verb every 2 seconds, refresh
+    // elapsed time every 200ms. Lives on its own thread so the
+    // spinner stays animated even when the child is silent.
+    let verb_idx = Arc::new(AtomicUsize::new(0));
+    let pb_for_ticker = pb.clone();
+    let verb_idx_for_ticker = Arc::clone(&verb_idx);
+    let last_tool_for_ticker = Arc::clone(&last_tool);
+    let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_for_ticker = Arc::clone(&stop_flag);
+    let ticker = thread::spawn(move || {
+        let start = start;
+        while !stop_for_ticker.load(Ordering::Relaxed) {
+            let elapsed = start.elapsed().as_secs();
+            // Rotate verb every 2s.
+            let idx = (elapsed / 2) as usize % VERBS.len();
+            verb_idx_for_ticker.store(idx, Ordering::Relaxed);
+            let verb = VERBS[idx];
+            let tool = last_tool_for_ticker.lock().unwrap().clone();
+            let msg = if tool.is_empty() {
+                format!("{HIGH}{verb}…{RESET} {DIM}({elapsed}s){RESET}")
+            } else {
+                format!(
+                    "{HIGH}{verb}…{RESET} {DIM}({elapsed}s · {tool}){RESET}"
+                )
+            };
+            pb_for_ticker.set_message(msg);
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+
     let mut cmd = StdCommand::new(provider);
+    let stream_json = provider == "claude";
     match provider {
         "claude" => {
             cmd.arg("--print")
                 .arg("--dangerously-skip-permissions")
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--disallowed-tools")
+                .arg("Skill")
                 .arg(&full);
         }
         _ => {
@@ -225,18 +332,224 @@ fn spawn_provider(provider: &str, user_prompt: &str) -> Result<()> {
         }
     }
     cmd.stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    let status = cmd
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
         .with_context(|| format!("spawn {provider}"))?;
-    if !status.success() {
+    let stdout = child.stdout.take().context("no stdout")?;
+    let stderr = child.stderr.take().context("no stderr")?;
+
+    // stderr → printed above the spinner with a [stderr] prefix.
+    let pb_for_err = pb.clone();
+    let stderr_thread = thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().map_while(|r| r.ok()) {
+            pb_for_err.println(format!("{DIM}[stderr] {line}{RESET}"));
+        }
+    });
+
+    // stdout: parse stream-json events for claude, plain pass-through
+    // for everyone else.
+    let reader = BufReader::new(stdout);
+    for line in reader.lines().map_while(|r| r.ok()) {
+        if line.is_empty() {
+            continue;
+        }
+        if stream_json {
+            match serde_json::from_str::<Value>(&line) {
+                Ok(event) => {
+                    if let Some(tool) = current_tool_from_event(&event) {
+                        *last_tool.lock().unwrap() = tool;
+                    }
+                    if let Some(pretty) = format_stream_event(&event) {
+                        pb.println(pretty);
+                    }
+                }
+                // Stream-json sometimes ends with a non-JSON banner —
+                // pass it through.
+                Err(_) => pb.println(line),
+            }
+        } else {
+            pb.println(line);
+        }
+    }
+
+    let _ = stderr_thread.join();
+    let status = child.wait()?;
+    stop_flag.store(true, Ordering::Relaxed);
+    let _ = ticker.join();
+    pb.finish_and_clear();
+
+    let elapsed = start.elapsed().as_secs();
+    if status.success() {
         println!(
-            "{DIM}↳ {provider} exited with status {}{RESET}",
+            "{DIM}✓ {provider} done ({elapsed}s){RESET}"
+        );
+    } else {
+        println!(
+            "{HOT}✗ {provider} exited with status {} ({elapsed}s){RESET}",
             status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
         );
     }
     Ok(())
+}
+
+/// Pretty-print one stream-json event. Returns `None` for events we
+/// don't surface (e.g. per-token partial deltas, unknown types).
+fn format_stream_event(event: &Value) -> Option<String> {
+    let ty = event.get("type")?.as_str()?;
+    match ty {
+        "system" => {
+            let subtype = event.get("subtype").and_then(Value::as_str).unwrap_or("");
+            Some(format!("{DIM}· session {subtype}{RESET}"))
+        }
+        "assistant" => {
+            let content = event.pointer("/message/content")?.as_array()?;
+            let mut out = Vec::new();
+            for block in content {
+                let bty = block.get("type")?.as_str()?;
+                match bty {
+                    "tool_use" => {
+                        let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
+                        let args = summarize_tool_input(name, block.get("input"));
+                        out.push(format!(
+                            "  {MINT}→{RESET} {BOLD}{name}{RESET} {DIM}({args}){RESET}"
+                        ));
+                    }
+                    "text" => {
+                        let txt = block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim();
+                        for raw_line in txt.lines() {
+                            let line = raw_line.trim_end();
+                            if !line.is_empty() {
+                                out.push(format!("  {line}"));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(out.join("\n"))
+            }
+        }
+        "user" => {
+            let content = event.pointer("/message/content")?.as_array()?;
+            for block in content {
+                if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+                    let is_error = block
+                        .get("is_error")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let marker = if is_error {
+                        format!("{HOT}✗{RESET}")
+                    } else {
+                        format!("{MINT}✓{RESET}")
+                    };
+                    return Some(format!("    {marker} {DIM}result{RESET}"));
+                }
+            }
+            None
+        }
+        "result" => {
+            let subtype = event.get("subtype").and_then(Value::as_str).unwrap_or("");
+            let cost = event
+                .get("total_cost_usd")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let turns = event.get("num_turns").and_then(Value::as_u64).unwrap_or(0);
+            Some(format!(
+                "{DIM}· session {subtype} ({turns} turns, ${cost:.4}){RESET}"
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Extract a short identifier for the most recent tool the assistant
+/// invoked, used as live spinner context ("Hunting… (12s · Bash)").
+fn current_tool_from_event(event: &Value) -> Option<String> {
+    if event.get("type")?.as_str()? != "assistant" {
+        return None;
+    }
+    let content = event.pointer("/message/content")?.as_array()?;
+    for block in content {
+        if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+            let name = block.get("name").and_then(Value::as_str).unwrap_or("?");
+            if name == "Task" {
+                if let Some(sub) = block
+                    .pointer("/input/subagent_type")
+                    .and_then(Value::as_str)
+                {
+                    return Some(format!("Task→{sub}"));
+                }
+            }
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn summarize_tool_input(name: &str, input: Option<&Value>) -> String {
+    let Some(input) = input else {
+        return String::new();
+    };
+    match name {
+        "Task" => {
+            let subtype = input
+                .get("subagent_type")
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            let bg = input
+                .get("run_in_background")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            format!("type={subtype}{}", if bg { ", background" } else { "" })
+        }
+        "Bash" => input
+            .get("command")
+            .and_then(Value::as_str)
+            .map(|c| {
+                let preview: String = c.chars().take(60).collect();
+                format!("`{preview}`")
+            })
+            .unwrap_or_default(),
+        n if n.starts_with("mcp__mantis__") => {
+            let mut parts = Vec::new();
+            for key in ["target_domain", "wave", "to_phase", "round", "auth_status"] {
+                if let Some(v) = input.get(key).and_then(Value::as_str) {
+                    let label = match key {
+                        "to_phase" => format!("→{v}"),
+                        _ => format!("{key}={v}"),
+                    };
+                    parts.push(label);
+                }
+            }
+            parts.join(", ")
+        }
+        _ => input
+            .as_object()
+            .map(|m| format!("{} args", m.len()))
+            .unwrap_or_default(),
+    }
+}
+
+/// Pseudo-random tip selection — UNIX-time-modulo, no rand dep.
+fn pick_tip() -> &'static str {
+    use std::time::SystemTime;
+    let idx = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| (d.as_nanos() as usize))
+        .unwrap_or(0)
+        % TIPS.len();
+    TIPS[idx]
 }
 
 fn current_cwd_label() -> String {

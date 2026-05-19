@@ -20,6 +20,8 @@ crossterm = "0.28"
 tokio = { workspace = true }
 anyhow = { workspace = true }
 rustyline = "14"
+indicatif = "0.17"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
