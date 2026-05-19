@@ -65,6 +65,8 @@ That single `mantis hack` invocation drives the full 7-phase FSM end-to-end, wit
   - [`mantis hack`](./cli/hack.md) — one-shot full FSM
   - [`mantis pentest`](./cli/pentest.md) — daemon-driven one-shot
   - [`mantis goal`](./cli/goal.md) — goal-directed, multi-wave
+  - [`mantis prompt`](./cli/prompt.md) — one-shot Claude-Code-style ad-hoc prompt
+  - [`mantis status`](./cli/status.md) — single-glance setup snapshot
   - [`mantis model`](./cli/model.md) — Tab / Shift+Tab Claude-model picker
   - [`mantis find-auth-bugs`](./cli/find-auth-bugs.md) — legacy auth-differential pipeline
 - **Policy**

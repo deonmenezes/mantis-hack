@@ -29,9 +29,18 @@ mantis hack <target> --i-have-authorization [OPTIONS] [-- <claude args>...]
 | `--deep` | off | Deep-recon mode — broader script-heavy recon plus durable surface-lead promotion. |
 | `--no-auth` | off | Skip AUTH phase; transition to HUNT with `auth_status: "unauthenticated"`. |
 | `--egress <profile>` | `default` | Named operator-managed egress profile. |
+| `--turbo` | off | Preset: implies `--deep` AND auto-selects Opus when no model preference exists. |
+| `--print-prompt` | off | Dump the assembled system + user prompts and exit before launching `claude`. Useful for debugging prompt changes without spending tokens. |
+| `--dry-run` | off | Run every pre-flight check (daemon up, claude on PATH, MCP registered, model resolved) and exit. Useful for CI smoke tests. |
 | `--daemon <url>` | `http://127.0.0.1:50451` | Daemon gRPC endpoint. Honors `MANTIS_DAEMON` env. |
 | `--claude-bin <path>` | _from PATH_ | Override the `claude` binary path. Honors `MANTIS_CLAUDE_BIN`. |
 | `-- <claude args>...` | — | Forwarded verbatim to the spawned `claude --print` process. Useful for `--model claude-opus-4-7`. |
+
+## Per-repo config
+
+If `.mantis.json` exists in the current directory (or any ancestor), `mantis hack` reads it for default values of `model`, `deep`, `no_auth`, `egress`, and `daemon`. Explicit CLI flags always win. See [`mantis model`](./model.md) and `mantis init --project` for scaffolding.
+
+If `MANTIS.md` exists alongside the config (or any ancestor), its contents are auto-loaded into the orchestrator's system prompt so spawned hunters see your repo's scope, do-not-touch list, and severity floor.
 
 ## Examples
 
