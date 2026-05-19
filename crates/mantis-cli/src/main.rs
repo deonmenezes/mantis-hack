@@ -1509,10 +1509,11 @@ async fn handle_hack(
 }
 
 /// Prepend `--model <id>` to the args forwarded to `claude --print`,
-/// honoring (in priority order):
+/// honoring (in priority order, claude-code / claw-code style):
 ///   1. user-supplied `-- --model …` / `-m …` (wins — leave untouched)
-///   2. `~/.Mantis/model` (set via `mantis model`)
-///   3. `--turbo` default (Opus)
+///   2. `MANTIS_MODEL` env var (per-shell override)
+///   3. `~/.Mantis/model` (persistent — set via `mantis model`)
+///   4. `--turbo` default (Opus, only when nothing else fires)
 fn apply_model_preference(claude_extra_args: Vec<String>, turbo: bool) -> Vec<String> {
     if claude_extra_args
         .iter()
@@ -1521,10 +1522,18 @@ fn apply_model_preference(claude_extra_args: Vec<String>, turbo: bool) -> Vec<St
         // User overrode; don't touch.
         return claude_extra_args;
     }
-    let (model_id, source) = match model_picker::load_saved() {
-        Some(saved) => (saved, "from `mantis model`"),
-        None if turbo => ("claude-opus-4-7".to_string(), "from --turbo preset"),
-        None => return claude_extra_args,
+    let env_model = std::env::var("MANTIS_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (model_id, source) = if let Some(env_id) = env_model {
+        (env_id, "from $MANTIS_MODEL env var")
+    } else if let Some(saved) = model_picker::load_saved() {
+        (saved, "from `mantis model`")
+    } else if turbo {
+        ("claude-opus-4-7".to_string(), "from --turbo preset")
+    } else {
+        return claude_extra_args;
     };
     eprintln!("[mantishack] model: {model_id}  ({source}; override via `-- --model …`)");
     let mut out = Vec::with_capacity(claude_extra_args.len() + 2);
@@ -1747,6 +1756,19 @@ async fn run_claude_one_shot(
 fn handle_status(output_format: String, daemon: String) -> Result<()> {
     let json_mode = output_format == "json";
     let saved_model = model_picker::load_saved();
+    let env_model = std::env::var("MANTIS_MODEL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    // Effective model resolution mirrors apply_model_preference:
+    // env > saved > none. (User's -- --model flag is per-run only.)
+    let (effective_model, effective_source) = if let Some(m) = env_model.as_ref() {
+        (Some(m.clone()), "MANTIS_MODEL env")
+    } else if let Some(m) = saved_model.as_ref() {
+        (Some(m.clone()), "~/.Mantis/model")
+    } else {
+        (None, "claude default")
+    };
     let claude_path = which_bin("claude");
     let mcp_bin = which_bin("mantis-mcp");
     let daemon_bin = which_bin("mantis-daemon");
@@ -1789,9 +1811,12 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
                 "binary_on_path": mcp_bin.as_ref().map(|p| p.display().to_string()),
             },
             "model": {
+                "effective": effective_model,
+                "effective_source": effective_source,
                 "saved": saved_model,
-                "source": if saved_model.is_some() { "mantis-model-file" } else { "claude-default" },
+                "env": env_model,
                 "file": mantis_home.as_ref().map(|d| d.join("model").display().to_string()),
+                "resolution_order": ["cli --model flag", "MANTIS_MODEL env", "~/.Mantis/model", "claude default"],
             },
             "mantis_home": mantis_home.as_ref().map(|p| p.display().to_string()),
         });
@@ -1831,17 +1856,24 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
     );
     println!();
     println!("  model:");
-    match &saved_model {
+    match &effective_model {
         Some(id) => {
             let label = model_picker::find_by_id(id).map(|m| m.label).unwrap_or("custom");
-            println!("    saved:           {id} ({label})");
-            println!("    source:          ~/.Mantis/model (via `mantis model`)");
+            println!("    effective:       {id} ({label})");
+            println!("    source:          {effective_source}");
         }
         None => {
-            println!("    saved:           (none)");
-            println!("    source:          claude default applies");
+            println!("    effective:       (none — claude default applies)");
         }
     }
+    println!(
+        "    env MANTIS_MODEL: {}",
+        env_model.as_deref().unwrap_or("(unset)")
+    );
+    println!(
+        "    saved file:       {}",
+        saved_model.as_deref().unwrap_or("(empty)")
+    );
     if let Some(h) = &mantis_home {
         println!();
         println!("  ~/.Mantis:       {}", h.display());
