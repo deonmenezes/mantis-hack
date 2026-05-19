@@ -42,6 +42,13 @@ service Engagement {
   // plan_hash that the final round MUST reference.
   rpc BuildVerificationAdjudication(BuildVerificationAdjudicationRequest)
       returns (BuildVerificationAdjudicationResponse);
+
+  // Write the grader's SUBMIT/HOLD/SKIP verdict. Persists the typed
+  // GradeVerdict into the engagement's SessionState so the
+  // GRADE -> REPORT gate can open. Required before TransitionPhase
+  // to REPORT.
+  rpc WriteGradeVerdict(WriteGradeVerdictRequest)
+      returns (WriteGradeVerdictResponse);
 }
 
 enum EngagementState {
@@ -204,4 +211,21 @@ message BuildVerificationAdjudicationResponse {
   // Canonical JSON of the full Adjudication for clients that want
   // the full plan (not just the hash).
   bytes adjudication_json = 8;
+}
+
+message WriteGradeVerdictRequest {
+  string engagement_id = 1;
+  // Canonical JSON of `GradeVerdict` (mantis-fsm). The daemon
+  // deserialises and validates, then appends a GradeVerdictRecorded
+  // event and updates SessionState.grade.
+  bytes verdict_json = 2;
+}
+
+message WriteGradeVerdictResponse {
+  string engagement_id = 1;
+  // SUBMIT | HOLD | SKIP
+  string verdict = 2;
+  uint32 total_score = 3;
+  // blake3 of the canonical JSON stored.
+  string verdict_canonical_hash = 4;
 }

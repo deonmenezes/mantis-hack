@@ -149,6 +149,17 @@ pub enum EventKind {
         hard_result: Option<String>,
         notes_joined: String,
     },
+    /// Grader wrote a SUBMIT/HOLD/SKIP verdict. `verdict_json` is the
+    /// canonical JSON of the full `GradeVerdict` for event-log replay
+    /// on daemon restart. `verdict_canonical_hash` is its blake3
+    /// fingerprint for operator tamper-detection.
+    GradeVerdictRecorded {
+        verdict: String,
+        total_score: u32,
+        verdict_canonical_hash: String,
+        /// Full canonical JSON stored for replay.
+        verdict_json: String,
+    },
 }
 
 impl Event {

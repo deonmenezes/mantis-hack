@@ -25,7 +25,7 @@ use mantis_proto::v1::{
     AuthorizeRequest, BuildVerificationAdjudicationRequest, CreateRequest,
     EngagementState as ProtoState, ExportRequest, ListRequest,
     OpenVerificationAttemptRequest, ScanRequest, SessionStateRequest, StartRequest,
-    StatusRequest, TransitionPhaseRequest, WriteVerificationRoundRequest,
+    StatusRequest, TransitionPhaseRequest, WriteGradeVerdictRequest, WriteVerificationRoundRequest,
 };
 
 use crate::daemon;
@@ -154,6 +154,17 @@ pub struct WriteVerificationRoundArgs {
     /// canonicalises, and stores. The final round MUST include
     /// `references_plan_hash` equal to the current adjudication plan.
     pub round_json: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteGradeVerdictArgs {
+    pub engagement_id: String,
+    /// Canonical JSON of `GradeVerdict`. Must contain `verdict`
+    /// (`SUBMIT` | `HOLD` | `SKIP`), `total_score` (u16), and
+    /// `findings` (array). Optional `feedback` string. MCP transports
+    /// may deliver this as a pre-encoded string; the handler normalises
+    /// `Value::String` → `Value::Object` before forwarding.
+    pub data: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1669,9 +1680,27 @@ impl MantisMcpServer {
         json_ok(&deferred_read_response("read_evidence_packs", &args.engagement_id))
     }
 
-    #[tool(description = "Read the grader's SUBMIT/HOLD/SKIP verdicts and 5-axis scores.")]
+    #[tool(description = "Read the grader's SUBMIT/HOLD/SKIP verdict and 5-axis scores. \
+                          Returns the stored GradeVerdict from the daemon's FSM session state, \
+                          or null when no verdict has been written yet.")]
     async fn mantis_read_grade_verdict(&self, Parameters(args): Parameters<EngagementIdArgs>) -> Result<CallToolResult, McpError> {
-        json_ok(&deferred_read_response("read_grade_verdict", &args.engagement_id))
+        let mut client = daemon::connect(&self.daemon_endpoint)
+            .await
+            .map_err(|e| to_internal("daemon connect", e))?;
+        let resp = client
+            .get_session_state(SessionStateRequest {
+                engagement_id: args.engagement_id.clone(),
+            })
+            .await
+            .map_err(|e| to_invalid("get_session_state rpc", e))?
+            .into_inner();
+        let session: serde_json::Value = serde_json::from_slice(&resp.session_json)
+            .map_err(|e| to_internal("decode session_json", e))?;
+        let grade = session.get("grade").cloned().unwrap_or(serde_json::Value::Null);
+        json_ok(&json!({
+            "engagement_id": args.engagement_id,
+            "grade": grade,
+        }))
     }
 
     #[tool(description = "Read per-capability metrics aggregated across this engagement (hit/miss rates by technique pack).")]
@@ -1801,9 +1830,75 @@ impl MantisMcpServer {
         json_ok(&recorded_response("write_evidence_packs", &args))
     }
 
-    #[tool(description = "Write the grader's SUBMIT/HOLD/SKIP verdict with 5-axis scores. Required before GRADE → REPORT.")]
-    async fn mantis_write_grade_verdict(&self, Parameters(args): Parameters<PayloadToolArgs>) -> Result<CallToolResult, McpError> {
-        json_ok(&recorded_response("write_grade_verdict", &args))
+    #[tool(description = "Write the grader's SUBMIT/HOLD/SKIP verdict with 5-axis scores. Required before GRADE → REPORT. \
+                          `data` must contain at minimum `verdict` (SUBMIT|HOLD|SKIP). \
+                          Full GradeVerdict shape: { verdict, total_score, findings, feedback? }. \
+                          Agent-shorthand shape also accepted: { verdict, findings_count?, five_axis?, rationale? }. \
+                          Persists the verdict into the daemon's FSM so the GRADE → REPORT gate can open.")]
+    async fn mantis_write_grade_verdict(&self, Parameters(args): Parameters<WriteGradeVerdictArgs>) -> Result<CallToolResult, McpError> {
+        // Normalise data: MCP transports may deliver it as a pre-encoded
+        // JSON string (Value::String) rather than a native object. Parse it
+        // back to a Value so to_vec produces valid object bytes for the daemon.
+        let verdict_value = match args.data {
+            serde_json::Value::String(ref s) => serde_json::from_str(s)
+                .map_err(|e| to_invalid("verdict data parse", e))?,
+            other => other,
+        };
+        // Normalise agent-shorthand payload → typed GradeVerdict shape.
+        // Agents may send { verdict, findings_count, five_axis, rationale }
+        // instead of the typed { verdict, total_score, findings, feedback }.
+        // Ensure `total_score` and `findings` are present so the daemon's
+        // serde deserializer succeeds.
+        let verdict_value = if verdict_value.get("total_score").is_none()
+            || verdict_value.get("findings").is_none()
+        {
+            let verdict_str = verdict_value
+                .get("verdict")
+                .and_then(|v| v.as_str())
+                .unwrap_or("SKIP");
+            let total_score = verdict_value
+                .get("total_score")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0u64);
+            let findings = verdict_value
+                .get("findings")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let feedback = verdict_value
+                .get("rationale")
+                .or_else(|| verdict_value.get("feedback"))
+                .and_then(|v| v.as_str())
+                .map(|s| serde_json::Value::String(s.to_string()));
+            let mut obj = serde_json::Map::new();
+            obj.insert("verdict".to_string(), serde_json::Value::String(verdict_str.to_string()));
+            obj.insert("total_score".to_string(), serde_json::Value::Number(total_score.into()));
+            obj.insert("findings".to_string(), findings);
+            if let Some(fb) = feedback {
+                obj.insert("feedback".to_string(), fb);
+            }
+            serde_json::Value::Object(obj)
+        } else {
+            verdict_value
+        };
+        let verdict_bytes = serde_json::to_vec(&verdict_value)
+            .map_err(|e| to_invalid("verdict data serialize", e))?;
+        let mut client = daemon::connect(&self.daemon_endpoint)
+            .await
+            .map_err(|e| to_internal("daemon connect", e))?;
+        let resp = client
+            .write_grade_verdict(WriteGradeVerdictRequest {
+                engagement_id: args.engagement_id,
+                verdict_json: verdict_bytes,
+            })
+            .await
+            .map_err(|e| to_invalid("write_grade_verdict rpc", e))?
+            .into_inner();
+        json_ok(&json!({
+            "engagement_id": resp.engagement_id,
+            "verdict": resp.verdict,
+            "total_score": resp.total_score,
+            "verdict_canonical_hash": resp.verdict_canonical_hash,
+        }))
     }
 
     #[tool(description = "Write a chain attempt (linked prerequisite findings, observed outcome, technique chain).")]

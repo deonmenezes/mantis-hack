@@ -23,8 +23,8 @@ use mantis_core::{EngagementId, OperatorId, Signer};
 use mantis_egress::{EgressConfig, EgressProxy};
 use mantis_event_store::{Event, EventKind, EventStore};
 use mantis_fsm::{
-    OverrideReason, Phase, SessionState as FsmSessionState, TransitionError, VerificationRound,
-    VerificationRoundResult,
+    GradeVerdict, OverrideReason, Phase, SessionState as FsmSessionState, TransitionError,
+    VerificationRound, VerificationRoundResult,
 };
 use mantis_posterior::Posteriors;
 use mantis_primitive::Primitive;
@@ -37,8 +37,8 @@ use mantis_proto::v1::{
     EngagementState as ProtoEngagementState, ExportRequest, ExportResponse, ListRequest,
     ListResponse, OpenVerificationAttemptRequest, OpenVerificationAttemptResponse, PauseRequest,
     ScanRequest, ScanResponse, SessionStateRequest, SessionStateResponse, StartRequest,
-    StatusRequest, TransitionPhaseRequest, TransitionPhaseResponse, WriteVerificationRoundRequest,
-    WriteVerificationRoundResponse,
+    StatusRequest, TransitionPhaseRequest, TransitionPhaseResponse, WriteGradeVerdictRequest,
+    WriteGradeVerdictResponse, WriteVerificationRoundRequest, WriteVerificationRoundResponse,
 };
 use mantis_scanner_http::{HttpProbeScanner, ProbeConfig, ProbeTarget};
 use mantis_scope::{BudgetTracker, ScopeEvaluator, ScopeManifest, SignedScope};
@@ -194,6 +194,11 @@ fn derive_fsm(id: EngagementId, target: String, events: &[Event]) -> FsmSessionS
                 // from the recorded rounds when the operator next
                 // calls BuildVerificationAdjudication. This avoids
                 // storing the full plan in the merkle log.
+            }
+            EventKind::GradeVerdictRecorded { verdict_json, .. } => {
+                if let Ok(g) = serde_json::from_str::<GradeVerdict>(verdict_json) {
+                    s.write_grade(g);
+                }
             }
             _ => {}
         }
@@ -903,6 +908,62 @@ impl Engagement for EngagementServiceImpl {
             adjudication_json,
         }))
     }
+
+    async fn write_grade_verdict(
+        &self,
+        request: Request<WriteGradeVerdictRequest>,
+    ) -> Result<Response<WriteGradeVerdictResponse>, Status> {
+        let inner = request.into_inner();
+        let id = parse_engagement_id(&inner.engagement_id)?;
+        let verdict: GradeVerdict = serde_json::from_slice(&inner.verdict_json)
+            .map_err(|e| Status::invalid_argument(format!("verdict_json: {e}")))?;
+
+        let verdict_str = verdict.verdict.as_str().to_string();
+        let total_score = verdict.total_score;
+
+        let canonical = serde_json::to_vec(&verdict)
+            .map_err(|e| Status::internal(format!("canonicalize verdict: {e}")))?;
+        let canonical_hash = hex::encode(blake3::hash(&canonical).as_bytes());
+        let canonical_str = String::from_utf8(canonical)
+            .map_err(|e| Status::internal(format!("canonical to utf8: {e}")))?;
+
+        // Persist into the in-memory FSM so the gate can open.
+        {
+            let mut fsm = self.fsm.write().await;
+            let session = fsm
+                .get_mut(&id)
+                .ok_or_else(|| Status::not_found(format!("engagement {id} not found")))?;
+            session.write_grade(verdict);
+        }
+        self.event_store
+            .append(
+                id,
+                EventKind::GradeVerdictRecorded {
+                    verdict: verdict_str.clone(),
+                    total_score: total_score as u32,
+                    verdict_canonical_hash: canonical_hash.clone(),
+                    verdict_json: canonical_str,
+                },
+                self.workspace_signer(),
+            )
+            .map_err(|e| Status::internal(format!("event store: {e}")))?;
+        if let Some(row) = self.state.write().await.get_mut(&id) {
+            row.event_count += 1;
+        }
+
+        info!(
+            engagement_id = %id,
+            verdict = %verdict_str,
+            total_score,
+            "grade verdict written"
+        );
+        Ok(Response::new(WriteGradeVerdictResponse {
+            engagement_id: id.to_string(),
+            verdict: verdict_str,
+            total_score: total_score as u32,
+            verdict_canonical_hash: canonical_hash,
+        }))
+    }
 }
 
 fn parse_round(s: &str) -> Option<VerificationRound> {
@@ -1541,5 +1602,65 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_slice(&resp.into_inner().session_json).unwrap();
         assert_eq!(v["phase"], "AUTH");
+    }
+
+    #[tokio::test]
+    async fn write_grade_verdict_persists_into_fsm_and_opens_grade_to_report_gate() {
+        let (_tmp, svc) = make_service().await;
+        let id_str = create_engagement(&svc, "skip-eng").await;
+        let id = parse_engagement_id(&id_str).unwrap();
+
+        // Set the FSM to GRADE phase directly (bypass transition gates for test speed).
+        {
+            let mut fsm = svc.fsm.write().await;
+            let s = fsm.get_mut(&id).unwrap();
+            s.explored.push("https://example.com/".into());
+            s.phase = mantis_fsm::Phase::Grade;
+        }
+
+        // GRADE -> REPORT must be blocked (no verdict yet).
+        let blocked = svc
+            .transition_phase(Request::new(TransitionPhaseRequest {
+                engagement_id: id_str.clone(),
+                to_phase: "REPORT".into(),
+                override_reason: None,
+                auth_status: None,
+            }))
+            .await
+            .expect_err("must block without verdict");
+        assert!(blocked.message().contains("grade_missing"));
+
+        // Write a SKIP verdict (empty findings → SKIP).
+        let verdict = mantis_fsm::GradeVerdict::compute(vec![], Some("no findings".into()));
+        let verdict_json = serde_json::to_vec(&verdict).unwrap();
+        let write_resp = svc
+            .write_grade_verdict(Request::new(WriteGradeVerdictRequest {
+                engagement_id: id_str.clone(),
+                verdict_json,
+            }))
+            .await
+            .expect("write_grade_verdict");
+        let wr = write_resp.into_inner();
+        assert_eq!(wr.verdict, "SKIP");
+        assert_eq!(wr.total_score, 0);
+        assert!(!wr.verdict_canonical_hash.is_empty());
+
+        // GRADE -> REPORT must now pass.
+        svc.transition_phase(Request::new(TransitionPhaseRequest {
+            engagement_id: id_str.clone(),
+            to_phase: "REPORT".into(),
+            override_reason: None,
+            auth_status: None,
+        }))
+        .await
+        .expect("grade->report should pass after writing SKIP verdict");
+
+        // Verify the GradeVerdictRecorded event landed in the merkle log.
+        let events = svc.event_store.replay(id).unwrap();
+        assert!(events.iter().any(|e| matches!(
+            &e.kind,
+            mantis_event_store::EventKind::GradeVerdictRecorded { verdict, .. }
+            if verdict == "SKIP"
+        )));
     }
 }

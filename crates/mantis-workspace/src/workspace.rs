@@ -9,7 +9,7 @@ use tracing::info;
 use crate::config::{WorkspaceConfig, CONFIG_FILENAME};
 use crate::error::WorkspaceError;
 use crate::key::{verify, Keypair, PublicKey};
-use crate::keystore::KeyStore;
+use crate::keystore::{FileKeyStore, KeyStore};
 use crate::operator::{
     list_operators_in_dir, operator_keystore_service, write_operator, OperatorInfo, OperatorProfile,
 };
@@ -69,6 +69,14 @@ impl Workspace {
             KEYSTORE_ACCOUNT,
             keypair.secret_bytes().as_ref(),
         )?;
+        // Also write to file keystore so the daemon can start in dark wake
+        // (macOS screen-locked / headless environments).
+        let file_ks = FileKeyStore::new(root.join("keys"));
+        let _ = file_ks.put(
+            &workspace_keystore_service(config.id),
+            KEYSTORE_ACCOUNT,
+            keypair.secret_bytes().as_ref(),
+        );
 
         info!(workspace_id = %config.id, root = %root, "workspace initialized");
         Ok(Self {
@@ -76,6 +84,60 @@ impl Workspace {
             config,
             keypair,
         })
+    }
+
+    /// Open an existing workspace. Resolution order:
+    /// 1. File keystore at `<root>/keys/` — non-blocking, works in dark wake.
+    /// 2. OS keystore (macOS Keychain, Linux Secret Service, etc.) — may block
+    ///    in headless environments.
+    /// 3. `MANTIS_SIGNING_KEY` environment variable (hex-encoded 32-byte secret).
+    ///
+    /// This order ensures the daemon can start in CI / macOS screen-locked
+    /// ("dark wake") contexts as long as `<root>/keys/` was provisioned when
+    /// the OS keystore was last accessible.
+    pub fn open_with_env_fallback(
+        root: &Utf8Path,
+        keystore: &dyn KeyStore,
+    ) -> Result<Self, WorkspaceError> {
+        // 1. Try file keystore first — instant, no OS round-trip.
+        let file_ks = FileKeyStore::new(root.join("keys"));
+        if let Ok(ws) = Self::open(root, &file_ks) {
+            info!(workspace_id = %ws.id(), "opened workspace via file keystore");
+            return Ok(ws);
+        }
+
+        // 2. Try the OS keystore (may block in dark wake; caller accepted this).
+        match Self::open(root, keystore) {
+            Ok(ws) => return Ok(ws),
+            Err(WorkspaceError::KeyStore(_)) => {}
+            Err(e) => return Err(e),
+        }
+
+        // 3. Try MANTIS_SIGNING_KEY env var.
+        let hex_key = std::env::var("MANTIS_SIGNING_KEY").map_err(|_| {
+            WorkspaceError::KeyStore(crate::keystore::KeyStoreError::Unavailable(
+                "OS keystore unavailable; file keystore missing; MANTIS_SIGNING_KEY not set".into(),
+            ))
+        })?;
+        let secret_bytes = hex::decode(hex_key.trim()).map_err(|e| {
+            WorkspaceError::KeyStore(crate::keystore::KeyStoreError::Unavailable(
+                format!("MANTIS_SIGNING_KEY hex decode: {e}"),
+            ))
+        })?;
+        let config_path = root.join(CONFIG_FILENAME);
+        let config_str = std::fs::read_to_string(&config_path)?;
+        let config = WorkspaceConfig::from_toml(&config_str)?;
+        if secret_bytes.len() != 32 {
+            return Err(WorkspaceError::MalformedKey);
+        }
+        let mut secret_array = [0u8; 32];
+        secret_array.copy_from_slice(&secret_bytes);
+        let keypair = Keypair::from_secret_bytes(&secret_array);
+        if keypair.public().as_bytes() != config.workspace_key.as_bytes() {
+            return Err(WorkspaceError::KeyMismatch);
+        }
+        info!(workspace_id = %config.id, "opened workspace via MANTIS_SIGNING_KEY env");
+        Ok(Self { root: root.to_path_buf(), config, keypair })
     }
 
     /// Open an existing workspace at `root`. Loads the config from disk
@@ -104,6 +166,15 @@ impl Workspace {
         if keypair.public().as_bytes() != config.workspace_key.as_bytes() {
             return Err(WorkspaceError::KeyMismatch);
         }
+
+        // Opportunistically back up to the file keystore so dark-wake
+        // daemon restarts can succeed without OS keychain access.
+        let file_ks = FileKeyStore::new(root.join("keys"));
+        let _ = file_ks.put(
+            &workspace_keystore_service(config.id),
+            KEYSTORE_ACCOUNT,
+            &secret_bytes,
+        );
 
         Ok(Self {
             root: root.to_path_buf(),

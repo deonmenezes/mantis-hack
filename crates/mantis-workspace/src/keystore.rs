@@ -96,6 +96,63 @@ impl KeyStore for OsKeyStore {
     }
 }
 
+/// A simple file-based key store that reads/writes hex-encoded secrets
+/// from a directory (`<root>/<service>-<account>.hex`). Used as a
+/// fallback on macOS when the OS keychain is inaccessible in dark wake.
+#[derive(Debug)]
+pub struct FileKeyStore {
+    root: std::path::PathBuf,
+}
+
+impl FileKeyStore {
+    pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    fn path(&self, service: &str, account: &str) -> std::path::PathBuf {
+        // Sanitize slashes/colons to avoid path traversal or invalid filenames.
+        let name = format!("{}-{}", service, account).replace(['/', '\\', ':'], "_");
+        self.root.join(format!("{name}.hex"))
+    }
+}
+
+impl KeyStore for FileKeyStore {
+    fn put(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyStoreError> {
+        std::fs::create_dir_all(&self.root)
+            .map_err(|e| KeyStoreError::Unavailable(format!("create dir: {e}")))?;
+        let encoded = hex::encode(secret);
+        std::fs::write(self.path(service, account), encoded)
+            .map_err(|e| KeyStoreError::Unavailable(format!("write key file: {e}")))
+    }
+
+    fn get(&self, service: &str, account: &str) -> Result<Vec<u8>, KeyStoreError> {
+        let path = self.path(service, account);
+        let encoded = std::fs::read_to_string(&path).map_err(|_| KeyStoreError::NotFound {
+            service: service.to_owned(),
+            account: account.to_owned(),
+        })?;
+        hex::decode(encoded.trim())
+            .map_err(|e| KeyStoreError::Unavailable(format!("hex decode: {e}")))
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<(), KeyStoreError> {
+        std::fs::remove_file(self.path(service, account)).map_err(|_| {
+            KeyStoreError::NotFound {
+                service: service.to_owned(),
+                account: account.to_owned(),
+            }
+        })
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "file"
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct InMemoryKeyStore {
     inner: Mutex<HashMap<(String, String), Vec<u8>>>,
