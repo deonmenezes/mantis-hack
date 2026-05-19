@@ -80,6 +80,12 @@ impl RunLog {
         }
     }
 
+    /// Read-only access to the log file path. Auto-resume reads this
+    /// to seed the next session with the prior log tail.
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
     /// Append a "Run finished" footer line + a blank gap.
     pub(crate) fn finalize(&self, exit_status: &str) {
         let elapsed = self.started_at.elapsed().as_secs_f64();
@@ -333,6 +339,81 @@ fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+/// Inspect a stream-json `result` event for the kinds of failures
+/// that warrant an auto-resume. Returns `Some(reason)` describing
+/// the failure when one is detected (and the caller should resume),
+/// `None` otherwise.
+///
+/// The `result` event's `subtype` distinguishes:
+///   - `success`           → no resume needed
+///   - `error_max_turns`   → resume with the seed unchanged
+///   - `error_during_execution` → resume (API error, network, …)
+///   - any other non-success → resume
+///
+/// `is_error: true` at top level is also treated as a resume signal.
+pub(crate) fn detect_api_error(event: &serde_json::Value) -> Option<String> {
+    if event.get("type").and_then(|t| t.as_str()) != Some("result") {
+        return None;
+    }
+    let subtype = event
+        .get("subtype")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    let is_error = event
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if subtype == "success" && !is_error {
+        return None;
+    }
+    Some(format!(
+        "subtype={subtype}{}",
+        if is_error { " is_error=true" } else { "" }
+    ))
+}
+
+/// Read back the current contents of the log file so an
+/// auto-resume on top of an API error can seed the new claude
+/// session with everything that already happened. Capped at `cap`
+/// bytes from the tail (the most recent events) so a huge log
+/// doesn't blow the resume prompt budget. Returns `None` when the
+/// file doesn't exist, is empty, or unreadable.
+pub(crate) fn tail(path: &Path, cap: usize) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if raw.len() <= cap {
+        return Some(raw);
+    }
+    // Cut at a UTF-8 boundary near the tail start.
+    let mut start = raw.len() - cap;
+    while start < raw.len() && !raw.is_char_boundary(start) {
+        start += 1;
+    }
+    // Find the next line break so we don't slice mid-bullet.
+    let line_start = raw[start..]
+        .find('\n')
+        .map(|i| start + i + 1)
+        .unwrap_or(start);
+    let mut out = String::from("…(earlier log truncated for resume)\n\n");
+    out.push_str(&raw[line_start..]);
+    Some(out)
+}
+
+/// Append a "Resume attempt N" header to the log so the new run is
+/// clearly demarcated from the prior failed run when an operator
+/// reads back the file later.
+pub(crate) fn append_resume_header(path: &Path, attempt: u32, reason: &str) -> Result<()> {
+    let mut file = OpenOptions::new().append(true).open(path)?;
+    writeln!(file, "\n## Resume attempt #{attempt}")?;
+    writeln!(file)?;
+    writeln!(file, "- **at**: `{}`", iso_now())?;
+    writeln!(file, "- **reason**: `{reason}`")?;
+    writeln!(file)?;
+    Ok(())
+}
+
 /// Pick a log-file path for the given engagement target. Order:
 ///   1. If `MANTIS_LOG_FILE` env var is set, use that path.
 ///   2. If a target_url / target identifier is given, write to
@@ -479,6 +560,58 @@ mod tests {
         let p = pick_log_path(Some("https://anything.example"));
         std::env::remove_var("MANTIS_LOG_FILE");
         assert_eq!(p, PathBuf::from("/tmp/explicit.md"));
+    }
+
+    #[test]
+    fn detect_api_error_flags_error_subtypes() {
+        let err = json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": true
+        });
+        assert!(detect_api_error(&err).is_some());
+
+        let maxturns = json!({"type": "result", "subtype": "error_max_turns"});
+        assert!(detect_api_error(&maxturns).is_some());
+
+        let success = json!({"type": "result", "subtype": "success", "is_error": false});
+        assert!(detect_api_error(&success).is_none());
+
+        let not_result = json!({"type": "assistant"});
+        assert!(detect_api_error(&not_result).is_none());
+    }
+
+    #[test]
+    fn tail_returns_full_content_when_under_cap() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "small content\n").unwrap();
+        let out = tail(tmp.path(), 1024).unwrap();
+        assert_eq!(out, "small content\n");
+    }
+
+    #[test]
+    fn tail_truncates_at_line_start_when_over_cap() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut body = String::new();
+        for i in 0..200 {
+            body.push_str(&format!("- line {i} with some padding text\n"));
+        }
+        std::fs::write(tmp.path(), &body).unwrap();
+        let out = tail(tmp.path(), 256).unwrap();
+        assert!(out.starts_with("…(earlier log truncated for resume)"));
+        // tail should end with the latest lines, intact
+        assert!(out.contains("line 199"));
+    }
+
+    #[test]
+    fn append_resume_header_adds_block() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "# existing\n").unwrap();
+        append_resume_header(tmp.path(), 2, "test reason").unwrap();
+        let out = std::fs::read_to_string(tmp.path()).unwrap();
+        assert!(out.contains("## Resume attempt #2"));
+        assert!(out.contains("reason"));
+        assert!(out.contains("test reason"));
     }
 
     #[test]

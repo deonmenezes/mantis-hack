@@ -25,6 +25,20 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_DAEMON_ENDPOINT: &str = "http://127.0.0.1:50451";
 
+/// How many times `mantis hack` / `mantis investigate` / `mantis
+/// prompt` will auto-resume on a failed `claude --print` session
+/// before giving up. Override at runtime via `MANTIS_MAX_RESUMES`.
+const DEFAULT_MAX_RESUMES_FALLBACK: u32 = 3;
+
+/// Resolved per-invocation so an operator can dial it via env var
+/// without rebuilding. Returns the fallback when unset / malformed.
+fn default_max_resumes() -> u32 {
+    std::env::var("MANTIS_MAX_RESUMES")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MAX_RESUMES_FALLBACK)
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "mantis", version, about = "Mantis daemon CLI")]
 struct Cli {
@@ -1599,12 +1613,14 @@ async fn handle_hack(
     };
     eprintln!();
 
-    let status = run_claude_slash_command(
+    let status = run_slash_with_resume(
         &claude_path,
-        &prompt,
-        &preauth_system_prompt,
         &claude_extra_args,
         run_log.as_ref(),
+        &prompt,
+        &preauth_system_prompt,
+        default_max_resumes(),
+        /* json_mode */ false,
     )
     .await?;
     if let Some(log) = &run_log {
@@ -1926,13 +1942,14 @@ async fn handle_prompt(
     if !json_mode {
         eprintln!();
     }
-    let status = run_claude_one_shot(
+    let status = run_one_shot_with_resume(
         &claude_path,
+        &claude_extra_args,
+        run_log.as_ref(),
         &text,
         &system_prompt,
-        &claude_extra_args,
+        default_max_resumes(),
         json_mode,
-        run_log.as_ref(),
     )
     .await?;
     if let Some(log) = &run_log {
@@ -2150,24 +2167,29 @@ async fn handle_investigate(
 
     // Driving the FSM uses run_claude_slash_command (Skill tool
     // disallowed, mirrors mantis hack). Static mode uses the
-    // one-shot path with json/text streaming.
+    // one-shot path with json/text streaming. Both go through
+    // run_with_resume so an API error → auto-restart with the
+    // current logs.md as context.
     let status = if drives_fsm {
-        run_claude_slash_command(
+        run_slash_with_resume(
             &claude_path,
-            &user_prompt,
-            &append_system_prompt,
             &claude_extra_args,
             run_log.as_ref(),
+            &user_prompt,
+            &append_system_prompt,
+            default_max_resumes(),
+            json_mode,
         )
         .await?
     } else {
-        run_claude_one_shot(
+        run_one_shot_with_resume(
             &claude_path,
+            &claude_extra_args,
+            run_log.as_ref(),
             &user_prompt,
             &append_system_prompt,
-            &claude_extra_args,
+            default_max_resumes(),
             json_mode,
-            run_log.as_ref(),
         )
         .await?
     };
@@ -2408,6 +2430,137 @@ fn build_static_investigator_prompts(
 /// doesn't have an orchestrator that could be derailed by it), and
 /// optionally streams raw `stream-json` events to stdout when the
 /// caller asked for `--output-format json`.
+/// Build a resume prompt that seeds the new claude session with
+/// the prior log tail plus the original task. The new claude reads
+/// what already happened, then continues from where the previous
+/// session failed.
+fn build_resume_prompt(original_prompt: &str, reason: &str, log_tail: &str) -> String {
+    format!(
+        "AUTO-RESUME from a previous Mantis session that failed.\n\n\
+         REASON: {reason}\n\n\
+         The earlier session was recording every tool call, sub-agent spawn, \
+         and assistant turn into a structured markdown log. The most recent \
+         portion of that log is included below — read it carefully so you do \
+         not redo work that already completed, and so you understand what \
+         state the engagement is in.\n\n\
+         === PRIOR RUN LOG TAIL (most recent first / newest at the bottom) ===\n\n\
+         {log_tail}\n\n\
+         === END LOG ===\n\n\
+         Now CONTINUE from where the previous session left off. Re-run the \
+         original task below; the MCP server, daemon, and any in-flight \
+         engagement state are still present, so prefer reading existing \
+         artifacts via `mantis_read_*` tools before re-doing finished work.\n\n\
+         === ORIGINAL TASK ===\n\n{original_prompt}"
+    )
+}
+
+/// Auto-resume wrapper around `run_claude_slash_command`. On any
+/// non-success exit OR mid-stream API-error detection, reads the
+/// run log tail and re-spawns `claude --print` with a resume
+/// prompt that includes the log. Capped at `max_resumes` retries.
+async fn run_slash_with_resume(
+    claude_path: &std::path::Path,
+    extra_args: &[String],
+    log: Option<&run_log::RunLog>,
+    base_prompt: &str,
+    base_system: &str,
+    max_resumes: u32,
+    json_mode: bool,
+) -> Result<std::process::ExitStatus> {
+    let mut prompt = base_prompt.to_string();
+    let mut attempt: u32 = 0;
+    loop {
+        let (status, err) = run_claude_slash_command(
+            claude_path, &prompt, base_system, extra_args, log,
+        )
+        .await?;
+        if err.is_none() && status.success() {
+            return Ok(status);
+        }
+        if attempt >= max_resumes {
+            log_resume_exhausted(json_mode, max_resumes, status, err.as_deref());
+            return Ok(status);
+        }
+        attempt += 1;
+        let reason = err.unwrap_or_else(|| format!("exit {status}"));
+        log_resume_attempt(json_mode, attempt, max_resumes, &reason);
+        prompt = prepare_resume_prompt(log, base_prompt, &reason, attempt);
+    }
+}
+
+/// Auto-resume wrapper around `run_claude_one_shot`.
+async fn run_one_shot_with_resume(
+    claude_path: &std::path::Path,
+    extra_args: &[String],
+    log: Option<&run_log::RunLog>,
+    base_prompt: &str,
+    base_system: &str,
+    max_resumes: u32,
+    json_mode: bool,
+) -> Result<std::process::ExitStatus> {
+    let mut prompt = base_prompt.to_string();
+    let mut attempt: u32 = 0;
+    loop {
+        let (status, err) = run_claude_one_shot(
+            claude_path, &prompt, base_system, extra_args, json_mode, log,
+        )
+        .await?;
+        if err.is_none() && status.success() {
+            return Ok(status);
+        }
+        if attempt >= max_resumes {
+            log_resume_exhausted(json_mode, max_resumes, status, err.as_deref());
+            return Ok(status);
+        }
+        attempt += 1;
+        let reason = err.unwrap_or_else(|| format!("exit {status}"));
+        log_resume_attempt(json_mode, attempt, max_resumes, &reason);
+        prompt = prepare_resume_prompt(log, base_prompt, &reason, attempt);
+    }
+}
+
+fn log_resume_attempt(json_mode: bool, attempt: u32, max_resumes: u32, reason: &str) {
+    if json_mode {
+        return;
+    }
+    eprintln!();
+    eprintln!(
+        "[mantishack] ⚠ claude session failed — auto-resume #{attempt}/{max_resumes} \
+         (reason: {reason})"
+    );
+}
+
+fn log_resume_exhausted(
+    json_mode: bool,
+    max_resumes: u32,
+    status: std::process::ExitStatus,
+    reason: Option<&str>,
+) {
+    if json_mode {
+        return;
+    }
+    eprintln!(
+        "[mantishack] auto-resume budget exhausted ({max_resumes} retries used). \
+         Final status: {status}, reason: {}",
+        reason.unwrap_or("non-zero exit")
+    );
+}
+
+fn prepare_resume_prompt(
+    log: Option<&run_log::RunLog>,
+    base_prompt: &str,
+    reason: &str,
+    attempt: u32,
+) -> String {
+    let log_tail = log
+        .and_then(|l| run_log::tail(l.path(), 32 * 1024))
+        .unwrap_or_else(|| "(no prior log available)".into());
+    if let Some(l) = log {
+        let _ = run_log::append_resume_header(l.path(), attempt, reason);
+    }
+    build_resume_prompt(base_prompt, reason, &log_tail)
+}
+
 async fn run_claude_one_shot(
     claude_path: &std::path::Path,
     prompt: &str,
@@ -2415,7 +2568,7 @@ async fn run_claude_one_shot(
     extra_args: &[String],
     json_mode: bool,
     log: Option<&run_log::RunLog>,
-) -> Result<std::process::ExitStatus> {
+) -> Result<(std::process::ExitStatus, Option<String>)> {
     use tokio::io::AsyncBufReadExt;
 
     let cwd = std::env::current_dir().context("get cwd")?;
@@ -2446,6 +2599,7 @@ async fn run_claude_one_shot(
         .ok_or_else(|| anyhow::anyhow!("claude child has no stdout pipe"))?;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
 
+    let mut api_error: Option<String> = None;
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
@@ -2455,9 +2609,12 @@ async fn run_claude_one_shot(
             // `--output-format json` scripting. Still record into the
             // markdown log so the operator gets a human-readable
             // mirror of the run.
-            if let Some(log) = log {
-                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Ok(ev) = serde_json::from_str::<serde_json::Value>(&line) {
+                if let Some(log) = log {
                     log.record(&ev);
+                }
+                if api_error.is_none() {
+                    api_error = run_log::detect_api_error(&ev);
                 }
             }
             println!("{line}");
@@ -2468,6 +2625,9 @@ async fn run_claude_one_shot(
                 if let Some(log) = log {
                     log.record(&event);
                 }
+                if api_error.is_none() {
+                    api_error = run_log::detect_api_error(&event);
+                }
                 if let Some(pretty) = format_stream_event(&event) {
                     eprintln!("{pretty}");
                 }
@@ -2476,7 +2636,7 @@ async fn run_claude_one_shot(
         }
     }
     let status = child.wait().await?;
-    Ok(status)
+    Ok((status, api_error))
 }
 
 /// `mantis status` — one-shot snapshot of the local Mantis setup.
@@ -3095,7 +3255,7 @@ async fn run_claude_slash_command(
     append_system_prompt: &str,
     extra_args: &[String],
     log: Option<&run_log::RunLog>,
-) -> Result<std::process::ExitStatus> {
+) -> Result<(std::process::ExitStatus, Option<String>)> {
     use tokio::io::AsyncBufReadExt;
 
     let cwd = std::env::current_dir().context("get cwd")?;
@@ -3128,6 +3288,7 @@ async fn run_claude_slash_command(
         .ok_or_else(|| anyhow::anyhow!("claude child has no stdout pipe"))?;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
 
+    let mut api_error: Option<String> = None;
     while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
@@ -3136,6 +3297,9 @@ async fn run_claude_slash_command(
             Ok(event) => {
                 if let Some(log) = log {
                     log.record(&event);
+                }
+                if api_error.is_none() {
+                    api_error = run_log::detect_api_error(&event);
                 }
                 if let Some(pretty) = format_stream_event(&event) {
                     eprintln!("{pretty}");
@@ -3147,7 +3311,7 @@ async fn run_claude_slash_command(
     }
 
     let status = child.wait().await?;
-    Ok(status)
+    Ok((status, api_error))
 }
 
 /// Convert one `--output-format stream-json` event into a human line
