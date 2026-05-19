@@ -375,20 +375,22 @@ const HIGH: Color = Color::Rgb(255, 200, 90);
 
 fn draw(f: &mut Frame<'_>, app: &App) {
     let area = f.area();
-    // Layout — one divider, and it belongs to the input:
-    //   top    : header (mascot + info, 4 rows)
-    //   middle : output area, grows to fill — conversation flows
-    //            freely from the header down to the input divider
-    //   above  : single divider, visually anchoring the input
-    //   near   : input row (anchored near the bottom)
-    //   bottom : 2-line status bar pinned to the very bottom
+    // Claude Code v2.1.144 layout — input is FENCED between two
+    // dividers, status bar sits below the second divider:
+    //   header (mascot + info, 4 rows)
+    //   output area, grows to fill
+    //   ─── divider 1
+    //   ❯ input row
+    //   ─── divider 2
+    //   status (2 rows, pinned bottom)
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4), // header
             Constraint::Min(0),    // output (fills available space)
-            Constraint::Length(1), // divider (above input)
+            Constraint::Length(1), // divider 1 (above input)
             Constraint::Length(1), // input row
+            Constraint::Length(1), // divider 2 (below input)
             Constraint::Length(2), // status (pinned bottom)
         ])
         .split(area);
@@ -397,7 +399,8 @@ fn draw(f: &mut Frame<'_>, app: &App) {
     draw_output(f, layout[1], app);
     draw_divider(f, layout[2]);
     draw_input(f, layout[3], app);
-    draw_status(f, layout[4], app);
+    draw_divider(f, layout[4]);
+    draw_status(f, layout[5], app);
 }
 
 fn draw_header(f: &mut Frame<'_>, area: Rect, app: &App) {
@@ -452,7 +455,10 @@ fn draw_divider(f: &mut Frame<'_>, area: Rect) {
 fn draw_input(f: &mut Frame<'_>, area: Rect, app: &App) {
     let cursor = if app.busy { "…" } else { "▌" };
     let body = Line::from(vec![
-        Span::styled("› ", Style::default().fg(DIM)),
+        // Match Claude Code's "❯" prompt char (heavy right-pointing
+        // angle, U+276F) — visually distinct from the lighter "›" we
+        // had before.
+        Span::styled("❯ ", Style::default().fg(MINT).add_modifier(Modifier::BOLD)),
         Span::styled(app.prompt.clone(), Style::default().fg(WHITE)),
         Span::styled(
             cursor.to_string(),
@@ -482,9 +488,11 @@ fn draw_status(f: &mut Frame<'_>, area: Rect, app: &App) {
     ]);
     let right1 = Span::styled("● xhigh", high);
 
-    // Line 2: yellow ▶▶ "ethical hacking … (shift+tab to cycle)"
+    // Line 2: yellow ⏵⏵ "ethical hacking … (shift+tab to cycle)"
+    // (⏵⏵ = U+23F5 BLACK MEDIUM RIGHT-POINTING TRIANGLE — the same
+    // double-play glyph Claude Code uses for its "auto mode on" hint)
     let line2 = Line::from(vec![
-        Span::styled("▶▶ ", red),
+        Span::styled("⏵⏵ ", red),
         Span::styled(
             "ethical hacking with authorization only",
             Style::default().fg(HIGH).add_modifier(Modifier::BOLD),
