@@ -1,6 +1,6 @@
 {
   "name": "@deonmenezes/mantis-cli-darwin-arm64",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "AUTHORIZED security testing only. Prebuilt mantis binaries for macOS Apple Silicon (arm64). Auto-installed by the `mantishack` package.",
   "homepage": "https://github.com/deonmenezes/mantishack",
   "repository": {

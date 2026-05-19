@@ -112,6 +112,26 @@ function shouldRunInit() {
   return readMarker() !== packageVersion();
 }
 
+// On macOS, npm-installed binaries inherit a `com.apple.quarantine`
+// extended attribute. Gatekeeper then prompts the user (often via a
+// password-style dialog) every single launch of an unsigned
+// binary — and there are 3 of them (mantis, mantis-daemon,
+// mantis-mcp), so the user sees the prompt three times. Strip the
+// xattr on every invocation; it's cheap, idempotent, and harmless
+// when the attr isn't there.
+function stripQuarantineOnMacos() {
+  if (process.platform !== "darwin") return;
+  const binDir = path.dirname(binaryPath);
+  for (const name of ["mantis", "mantis-daemon", "mantis-mcp"]) {
+    const target = path.join(binDir, name);
+    if (!fs.existsSync(target)) continue;
+    // `xattr -d <attr> <file>` exits non-zero if the attr isn't
+    // present — that's fine. stdio is ignored so the operator never
+    // sees the "attribute not found" noise.
+    spawnSync("xattr", ["-d", "com.apple.quarantine", target], { stdio: "ignore" });
+  }
+}
+
 function runFirstRunInit() {
   process.stderr.write(
     "[mantishack] first run — wiring Claude plugin + MCP server (one-time setup)\n"
@@ -133,6 +153,12 @@ function runFirstRunInit() {
   }
   writeMarker(packageVersion());
 }
+
+// Run the macOS quarantine strip before every spawn — cheap and
+// idempotent. Without this, Gatekeeper prompts for the user
+// password on each binary's first launch (so 3 prompts total
+// across mantis / mantis-daemon / mantis-mcp).
+stripQuarantineOnMacos();
 
 if (shouldRunInit()) {
   runFirstRunInit();
