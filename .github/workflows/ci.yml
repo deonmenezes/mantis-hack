@@ -31,6 +31,9 @@ jobs:
           components: clippy
       - name: Install Linux build deps (libdbus for keyring)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -47,6 +50,9 @@ jobs:
       - name: Install Linux build deps (libdbus for keyring)
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
