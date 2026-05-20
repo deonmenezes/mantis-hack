@@ -77,9 +77,13 @@ jobs:
           - npm_key: darwin-arm64
             runs_on: macos-14
             cargo_target: aarch64-apple-darwin
-          - npm_key: darwin-x64
-            runs_on: macos-13
-            cargo_target: x86_64-apple-darwin
+          # darwin-x64 (Intel Mac) temporarily disabled — macos-13 runner
+          # is consistently slow (45+ min) and was blocking publish. Will
+          # re-enable in a follow-up release once a faster runner option
+          # is in place. See workflow history for the v0.0.8 release.
+          # - npm_key: darwin-x64
+          #   runs_on: macos-13
+          #   cargo_target: x86_64-apple-darwin
           - npm_key: linux-x64
             runs_on: ubuntu-22.04
             cargo_target: x86_64-unknown-linux-gnu
@@ -140,7 +144,7 @@ jobs:
       fail-fast: true
       max-parallel: 4
       matrix:
-        npm_key: [darwin-arm64, darwin-x64, linux-x64, linux-arm64]
+        npm_key: [darwin-arm64, linux-x64, linux-arm64]   # darwin-x64 temporarily skipped, see build-binaries matrix
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
@@ -188,7 +192,7 @@ jobs:
       - name: Wait for platform packages to be queryable
         run: |
           VER="${{ needs.verify-version.outputs.version }}"
-          for plat in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+          for plat in darwin-arm64 linux-x64 linux-arm64; do   # darwin-x64 temporarily skipped, see build-binaries matrix
             for i in $(seq 1 30); do
               if npm view "@deonmenezes/mantis-cli-$plat@$VER" version >/dev/null 2>&1; then
                 echo "  ✓ @deonmenezes/mantis-cli-$plat@$VER is live"
