@@ -136,7 +136,21 @@ function runFirstRunInit() {
   process.stderr.write(
     "[mantishack] first run — wiring Claude plugin + MCP server (one-time setup)\n"
   );
-  const initEnv = { ...childEnv, MANTIS_PLUGIN_SRC: pluginRoot };
+  // Hand the Rust init the npm-resolved `mantis-mcp` path so its
+  // .mcp.json rewrite and `claude mcp add` / `codex mcp add` calls
+  // point at the sibling binary in the platform package, not a stale
+  // `~/.cargo/bin/mantis-mcp` it might happen to find on PATH.
+  let mantisMcpPath = null;
+  try {
+    mantisMcpPath = require.resolve(`${pkg}/bin/mantis-mcp`);
+  } catch {
+    // Fall back to whatever the Rust `which_bin` lookup finds.
+  }
+  const initEnv = {
+    ...childEnv,
+    MANTIS_PLUGIN_SRC: pluginRoot,
+    ...(mantisMcpPath ? { MANTIS_MCP_BIN: mantisMcpPath } : {}),
+  };
   // We pass --no-daemon because the daemon's lifecycle is owned by
   // the user (or by `mantis hack` preflight); we just want plugin +
   // MCP wiring here.

@@ -1687,7 +1687,7 @@ async fn handle_hack(
     let (daemon_res, claude_res, mcp_bin_res) = tokio::join!(
         tokio::task::spawn_blocking(move || ensure_daemon_for_hack(&daemon_for_task)),
         tokio::task::spawn_blocking(move || resolve_claude_binary(claude_bin_for_task.as_deref())),
-        tokio::task::spawn_blocking(|| which_bin("mantis-mcp")),
+        tokio::task::spawn_blocking(resolve_mantis_mcp_bin),
     );
     daemon_res.context("spawn_blocking(daemon-check)")??;
     let claude_path = claude_res.context("spawn_blocking(claude-resolve)")??;
@@ -2105,7 +2105,7 @@ async fn handle_prompt(
     let claude_bin_for_task = claude_bin.clone();
     let (claude_res, mcp_bin_res) = tokio::join!(
         tokio::task::spawn_blocking(move || resolve_claude_binary(claude_bin_for_task.as_deref())),
-        tokio::task::spawn_blocking(|| which_bin("mantis-mcp")),
+        tokio::task::spawn_blocking(resolve_mantis_mcp_bin),
     );
     let claude_path = claude_res.context("spawn_blocking(claude-resolve)")??;
     let mcp_bin = mcp_bin_res.context("spawn_blocking(mantis-mcp lookup)")?;
@@ -2327,7 +2327,7 @@ async fn handle_investigate(
     let claude_bin_for_task = claude_bin.clone();
     let (claude_res, mcp_bin_res, daemon_res) = tokio::join!(
         tokio::task::spawn_blocking(move || resolve_claude_binary(claude_bin_for_task.as_deref())),
-        tokio::task::spawn_blocking(|| which_bin("mantis-mcp")),
+        tokio::task::spawn_blocking(resolve_mantis_mcp_bin),
         {
             let daemon = daemon.clone();
             tokio::task::spawn_blocking(move || {
@@ -2902,7 +2902,7 @@ fn handle_status(output_format: String, daemon: String) -> Result<()> {
         (None, "claude default")
     };
     let claude_path = which_bin("claude");
-    let mcp_bin = which_bin("mantis-mcp");
+    let mcp_bin = resolve_mantis_mcp_bin();
     let daemon_bin = which_bin("mantis-daemon");
     let daemon_up = daemon_is_up(&daemon);
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
@@ -3053,6 +3053,17 @@ fn ensure_daemon_for_hack(endpoint: &str) -> Result<()> {
     })?;
     spawn_daemon_detached(&daemon_bin, endpoint)
         .with_context(|| format!("spawning mantis-daemon at {endpoint}"))?;
+    // spawn_daemon_detached() already waited up to 5s. Extend the
+    // health gate to a total of ~15s so slow first-runs (cold-start
+    // sqlite init, codesigning gatekeeper on macOS) still get a green
+    // light before we hand off to the AI-CLI host.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !daemon_is_up(endpoint) {
+        if std::time::Instant::now() > deadline {
+            anyhow::bail!("daemon failed to start within 15s at {endpoint}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     Ok(())
 }
 
@@ -3080,8 +3091,41 @@ fn resolve_claude_binary(override_path: Option<&camino::Utf8Path>) -> Result<std
 /// `mantis-mcp` as a user-scope MCP server pointing at the daemon
 /// endpoint we'll be using.
 fn ensure_mantis_mcp_registered(claude_path: &std::path::Path, daemon_endpoint: &str) -> Result<()> {
-    let mcp_bin_prefetched = which_bin("mantis-mcp");
+    let mcp_bin_prefetched = resolve_mantis_mcp_bin();
     ensure_mantis_mcp_registered_with_prefetched_helper(claude_path, daemon_endpoint, mcp_bin_prefetched)
+}
+
+/// Idempotent. Register `mantis-mcp` with the `codex` CLI. Codex
+/// doesn't ship a `mcp get <name>` subcommand, so we always force the
+/// remove-then-add path (both are no-ops when the entry doesn't
+/// exist / already exists, which is fine).
+fn ensure_codex_mcp_registered(
+    codex_path: &std::path::Path,
+    mantis_mcp_path: &std::path::Path,
+    daemon_endpoint: &str,
+) -> Result<()> {
+    eprintln!("[mantishack] mcp:    registering `mantis` MCP server with codex");
+    let _ = std::process::Command::new(codex_path)
+        .args(["mcp", "remove", "mantis"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    let status = std::process::Command::new(codex_path)
+        .args([
+            "mcp",
+            "add",
+            "mantis",
+            "--",
+            mantis_mcp_path.to_string_lossy().as_ref(),
+            "--daemon",
+            daemon_endpoint,
+        ])
+        .status()
+        .context("invoke `codex mcp add`")?;
+    if !status.success() {
+        anyhow::bail!("`codex mcp add` exited with status {status}");
+    }
+    Ok(())
 }
 
 /// Same as [`ensure_mantis_mcp_registered`] but takes the
@@ -3147,23 +3191,102 @@ fn handle_init(
 ) -> Result<()> {
     println!("Mantis init — wiring plugin + MCP + daemon");
 
+    // Workspace gate: create `~/.mantis` (or $MANTIS_HOME) up front so
+    // downstream subcommands don't blow up on a missing workspace dir.
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let ws_path = std::env::var("MANTIS_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(format!("{home}/.mantis")));
+    if !ws_path.exists() {
+        println!("  workspace: initialising at {}", ws_path.display());
+        cmd_workspace_init(None).context("workspace init failed")?;
+    } else {
+        println!("  workspace: already exists at {}", ws_path.display());
+    }
+
+    // Detect installed AI-CLI hosts up front so each plugin / mcp step
+    // can soft-skip the ones the operator doesn't have. We treat both
+    // a binary on PATH OR a `~/.<host>` config dir as "present" since
+    // some installs (Claude Code GUI) drop the config dir without
+    // leaving the CLI on PATH.
+    let plugin_src_resolved = if !no_plugin || !no_mcp {
+        Some(resolve_plugin_src(plugin_src.as_ref())?)
+    } else {
+        None
+    };
+    let claude_present = which_bin("claude").is_some()
+        || std::path::PathBuf::from(format!("{home}/.claude")).is_dir();
+    let codex_present = which_bin("codex").is_some()
+        || std::path::PathBuf::from(format!("{home}/.codex")).is_dir();
+    let opencode_present = which_bin("opencode").is_some()
+        || std::path::PathBuf::from(format!("{home}/.config/opencode")).is_dir();
+
+    let mut any_host_wired = false;
+
     if !no_plugin {
-        let src = resolve_plugin_src(plugin_src.as_ref())?;
-        copy_claude_plugin(&src)?;
+        let src = plugin_src_resolved
+            .as_ref()
+            .expect("plugin_src_resolved set when !no_plugin");
+        if claude_present {
+            copy_claude_plugin(src)?;
+            any_host_wired = true;
+        } else {
+            println!("  plugin:  claude not detected — skipping claude plugin");
+        }
+        if codex_present {
+            copy_codex_plugin(src)?;
+            any_host_wired = true;
+        } else {
+            println!("  plugin:  codex not detected — skipping codex plugin");
+        }
+        if opencode_present {
+            copy_opencode_plugin(src)?;
+            any_host_wired = true;
+        } else {
+            println!("  plugin:  opencode not detected — skipping opencode plugin");
+        }
     } else {
         println!("  plugin:  skipped (--no-plugin)");
     }
 
     if !no_mcp {
-        let claude = which_bin("claude").ok_or_else(|| {
-            anyhow::anyhow!(
-                "`claude` is not on PATH — install Claude Code from \
-                 https://claude.com/claude-code, then re-run `mantis init`."
-            )
-        })?;
-        ensure_mantis_mcp_registered(&claude, &daemon_endpoint)?;
+        let claude_bin = which_bin("claude");
+        let codex_bin = which_bin("codex");
+        if claude_bin.is_none() && codex_bin.is_none() {
+            anyhow::bail!(
+                "no MCP-capable AI CLI detected (neither `claude` nor `codex` on PATH).\n\
+                 Install Claude Code (https://claude.com/claude-code) or Codex CLI, \
+                 then re-run `mantis init`. Use `--no-mcp` to skip MCP registration."
+            );
+        }
+        if let Some(claude) = claude_bin {
+            ensure_mantis_mcp_registered(&claude, &daemon_endpoint)?;
+            any_host_wired = true;
+        } else {
+            println!("  mcp:     claude not on PATH — skipping claude MCP registration");
+        }
+        if let Some(codex) = codex_bin {
+            if let Some(mcp_bin) = resolve_mantis_mcp_bin() {
+                ensure_codex_mcp_registered(&codex, &mcp_bin, &daemon_endpoint)?;
+                any_host_wired = true;
+            } else {
+                println!(
+                    "  mcp:     codex found but `mantis-mcp` is not installed — \
+                     skipping codex MCP registration"
+                );
+            }
+        } else {
+            println!("  mcp:     codex not on PATH — skipping codex MCP registration");
+        }
     } else {
         println!("  mcp:     skipped (--no-mcp)");
+    }
+
+    if !no_plugin && !no_mcp && !any_host_wired {
+        anyhow::bail!(
+            "no AI-CLI host detected (claude / codex / opencode). Install at least one \
+             and re-run, or pass `--no-plugin --no-mcp` to skip host wiring."
+        );
     }
 
     if !no_daemon {
@@ -3314,6 +3437,10 @@ fn resolve_plugin_src(override_path: Option<&Utf8PathBuf>) -> Result<Utf8PathBuf
 
 /// Copy `<plugin_src>/claude-code/` into `~/.claude/plugins/mantis/`.
 /// Removes the previous install first so stale files don't linger.
+/// After copy, rewrites the staged `.mcp.json` so the `command` field
+/// points at the actually-installed `mantis-mcp` rather than the
+/// hardcoded `${HOME}/.cargo/bin/mantis-mcp` template (which is wrong
+/// for npm / Homebrew installs).
 fn copy_claude_plugin(plugin_src: &Utf8PathBuf) -> Result<()> {
     let src = plugin_src.join("claude-code");
     if !src.as_std_path().is_dir() {
@@ -3331,7 +3458,108 @@ fn copy_claude_plugin(plugin_src: &Utf8PathBuf) -> Result<()> {
     }
     copy_dir_recursive(src.as_std_path(), &dest)
         .with_context(|| format!("copy plugin -> {}", dest.display()))?;
+    rewrite_claude_mcp_json(&dest.join(".mcp.json"))?;
     println!("  plugin:  installed at {}", dest.display());
+    Ok(())
+}
+
+/// Copy `<plugin_src>/codex/` into `~/.codex/plugins/mantis/`.
+/// Mirrors [`copy_claude_plugin`] without any `.mcp.json` rewrite —
+/// the codex plugin is a `plugin.toml` + `prompts/` bundle today and
+/// MCP registration happens via `codex mcp add` instead.
+fn copy_codex_plugin(plugin_src: &Utf8PathBuf) -> Result<()> {
+    let src = plugin_src.join("codex");
+    if !src.as_std_path().is_dir() {
+        anyhow::bail!("plugin source has no `codex/` subdirectory: {plugin_src}");
+    }
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dest = std::path::PathBuf::from(format!("{home}/.codex/plugins/mantis"));
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("remove existing plugin dir {}", dest.display()))?;
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create plugin parent {}", parent.display()))?;
+    }
+    copy_dir_recursive(src.as_std_path(), &dest)
+        .with_context(|| format!("copy plugin -> {}", dest.display()))?;
+    println!("  plugin:  installed codex plugin at {}", dest.display());
+    Ok(())
+}
+
+/// Copy `<plugin_src>/opencode/` into `~/.config/opencode/plugins/mantis/`.
+/// OpenCode has no known `mcp add` CLI subcommand, so we just stage the
+/// plugin files (commands + opencode.json); no MCP registration step.
+fn copy_opencode_plugin(plugin_src: &Utf8PathBuf) -> Result<()> {
+    let src = plugin_src.join("opencode");
+    if !src.as_std_path().is_dir() {
+        anyhow::bail!("plugin source has no `opencode/` subdirectory: {plugin_src}");
+    }
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dest = std::path::PathBuf::from(format!("{home}/.config/opencode/plugins/mantis"));
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("remove existing plugin dir {}", dest.display()))?;
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create plugin parent {}", parent.display()))?;
+    }
+    copy_dir_recursive(src.as_std_path(), &dest)
+        .with_context(|| format!("copy plugin -> {}", dest.display()))?;
+    println!("  plugin:  installed opencode plugin at {}", dest.display());
+    Ok(())
+}
+
+/// Resolve the `mantis-mcp` binary path, preferring the npm-shim hint
+/// `MANTIS_MCP_BIN` if set (so npm installs point at the sibling
+/// binary rather than a stale `~/.cargo/bin/mantis-mcp`). Falls back
+/// to a `PATH` walk via [`which_bin`].
+fn resolve_mantis_mcp_bin() -> Option<std::path::PathBuf> {
+    if let Ok(env) = std::env::var("MANTIS_MCP_BIN") {
+        let pb = std::path::PathBuf::from(env);
+        if pb.is_file() {
+            return Some(pb);
+        }
+    }
+    which_bin("mantis-mcp")
+}
+
+/// Rewrite the staged Claude plugin's `.mcp.json` so the `command`
+/// points at the actually-installed `mantis-mcp` binary instead of
+/// the hardcoded `${HOME}/.cargo/bin/mantis-mcp` template baked into
+/// the source plugin. Best-effort: missing file or unresolved binary
+/// is logged but never fatal — the plugin is still usable once the
+/// user installs `mantis-mcp` separately.
+fn rewrite_claude_mcp_json(mcp_json_path: &std::path::Path) -> Result<()> {
+    if !mcp_json_path.is_file() {
+        return Ok(());
+    }
+    let Some(mcp_bin) = resolve_mantis_mcp_bin() else {
+        println!(
+            "  plugin:  warn — `mantis-mcp` not found; .mcp.json still points at the \
+             default template. Install mantis-mcp (npm i -g mantishack / cargo install \
+             --path crates/mantis-mcp) for the Claude plugin to work."
+        );
+        return Ok(());
+    };
+    let raw = std::fs::read_to_string(mcp_json_path)
+        .with_context(|| format!("read {}", mcp_json_path.display()))?;
+    let mut doc: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {}", mcp_json_path.display()))?;
+    let mcp_bin_str = mcp_bin.to_string_lossy().into_owned();
+    if let Some(cmd) = doc
+        .get_mut("mcpServers")
+        .and_then(|s| s.get_mut("mantis"))
+        .and_then(|m| m.get_mut("command"))
+    {
+        *cmd = serde_json::Value::String(mcp_bin_str);
+    }
+    let pretty = serde_json::to_string_pretty(&doc)
+        .with_context(|| format!("serialize {}", mcp_json_path.display()))?;
+    std::fs::write(mcp_json_path, format!("{pretty}\n"))
+        .with_context(|| format!("write {}", mcp_json_path.display()))?;
     Ok(())
 }
 
