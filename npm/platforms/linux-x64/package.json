@@ -1,6 +1,6 @@
 {
   "name": "@deonmenezes/mantis-cli-linux-x64",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "AUTHORIZED security testing only. Prebuilt mantis binaries for Linux x86_64. Auto-installed by the `mantishack` package.",
   "homepage": "https://github.com/deonmenezes/mantishack",
   "repository": {

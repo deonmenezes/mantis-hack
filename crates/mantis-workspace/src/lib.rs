@@ -29,7 +29,9 @@ pub use crate::config::{WorkspaceConfig, CONFIG_FILENAME, SCHEMA_VERSION};
 pub use crate::doctor::{run as run_doctor, DoctorReport};
 pub use crate::error::WorkspaceError;
 pub use crate::key::{verify, Keypair, PublicKey, SIGN_DOMAIN_PREFIX};
-pub use crate::keystore::{FileKeyStore, InMemoryKeyStore, KeyStore, KeyStoreError, OsKeyStore};
+pub use crate::keystore::{
+    default_keystore, FileKeyStore, InMemoryKeyStore, KeyStore, KeyStoreError, OsKeyStore,
+};
 pub use crate::operator::{operator_keystore_service, OperatorInfo, OperatorProfile};
 pub use crate::workspace::{workspace_keystore_service, Workspace};
 

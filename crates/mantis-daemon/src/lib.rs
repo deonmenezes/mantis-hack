@@ -19,7 +19,7 @@ use anyhow::Context;
 use camino::{Utf8Path, Utf8PathBuf};
 use mantis_event_store::EventStore;
 use mantis_proto::v1::engagement_server::EngagementServer;
-use mantis_workspace::{default_workspace_root, OsKeyStore, Workspace};
+use mantis_workspace::{default_keystore, default_workspace_root, Workspace};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -46,9 +46,9 @@ impl DaemonConfig {
 /// service loop runs forever.
 pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
     let root = config.resolved_root();
-    let ks = OsKeyStore::new();
+    let ks = default_keystore(root.as_std_path());
     let workspace =
-        Arc::new(Workspace::open_with_env_fallback(&root, &ks).context("open workspace")?);
+        Arc::new(Workspace::open_with_env_fallback(&root, &*ks).context("open workspace")?);
     let event_store_path = root.join("events.rocksdb");
     let event_store = Arc::new(EventStore::open(&event_store_path).map_err(|e| {
         if is_lock_contention(&e) {

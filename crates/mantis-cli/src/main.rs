@@ -20,7 +20,7 @@ use mantis_proto::v1::{
     AuthorizeRequest, CreateRequest, EngagementInfo, EngagementState as ProtoEngagementState,
     ExportRequest, ListRequest, PauseRequest, ScanRequest, StartRequest, StatusRequest,
 };
-use mantis_workspace::{default_workspace_root, run_doctor, OsKeyStore, Workspace};
+use mantis_workspace::{default_keystore, default_workspace_root, run_doctor, Workspace};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_DAEMON_ENDPOINT: &str = "http://127.0.0.1:50451";
@@ -400,6 +400,13 @@ enum Command {
         #[arg(long)]
         project: bool,
     },
+    /// Update Mantis to the latest version.
+    ///
+    /// Detects the install method (npm / cargo / Homebrew) by looking
+    /// at the running binary path, then either runs the upgrade
+    /// command directly (`npm i -g mantishack@latest`) or prints the
+    /// command the user should run. Idempotent — re-runs are safe.
+    Update,
     /// Interactive TUI — Claude-Code-style prompt box. Type a request
     /// (e.g. "hack example.com") and Mantis routes it to your chosen
     /// AI CLI (claude / codex / opencode / gemini). Tab cycles
@@ -772,6 +779,7 @@ fn main() -> Result<()> {
             setup::run();
             Ok(())
         }
+        Command::Update => handle_update(),
         Command::Version { output_format } => handle_version(output_format),
         Command::Daemon { bind, root } => run_async(async move {
             mantis_daemon::run(mantis_daemon::DaemonConfig {
@@ -2138,6 +2146,68 @@ fn handle_version(output_format: String) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum InstallKind {
+    Npm,
+    Cargo,
+    Homebrew,
+    Unknown,
+}
+
+fn detect_install_kind(exe: &std::path::Path) -> InstallKind {
+    let s = exe.to_string_lossy();
+    if s.contains("/node_modules/") || s.contains("/.npm/") {
+        InstallKind::Npm
+    } else if s.contains("/.cargo/bin/") {
+        InstallKind::Cargo
+    } else if s.starts_with("/opt/homebrew/") || s.starts_with("/usr/local/Cellar/") {
+        InstallKind::Homebrew
+    } else {
+        InstallKind::Unknown
+    }
+}
+
+/// `mantis update` — refresh Mantis to the latest version. Detects
+/// the install method by inspecting the running binary path and
+/// either runs the upgrade directly (npm) or prints the upgrade
+/// command (cargo / Homebrew). No state is touched; safe to re-run.
+fn handle_update() -> Result<()> {
+    println!("[mantis] update: checking for newer version...");
+    let exe = std::env::current_exe().context("locate current exe")?;
+    let install_kind = detect_install_kind(&exe);
+    println!("[mantis] update: detected install method: {install_kind:?}");
+    match install_kind {
+        InstallKind::Npm => {
+            println!("[mantis] update: running `npm i -g mantishack@latest`...");
+            let status = std::process::Command::new("npm")
+                .args(["i", "-g", "mantishack@latest"])
+                .status()
+                .context("invoke npm")?;
+            if !status.success() {
+                anyhow::bail!("npm i -g mantishack@latest failed");
+            }
+            println!("[mantis] update: done. Run `mantis --version` to confirm.");
+        }
+        InstallKind::Cargo => {
+            println!(
+                "Installed via cargo. Run: \
+                 cargo install --git https://github.com/deonmenezes/mantishack mantis-cli"
+            );
+        }
+        InstallKind::Homebrew => {
+            println!("Installed via Homebrew. Run: brew upgrade mantishack");
+        }
+        InstallKind::Unknown => {
+            println!(
+                "Couldn't detect install method (binary at {}). See \
+                 https://github.com/deonmenezes/mantishack for update instructions.",
+                exe.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `mantis prompt "..."` — claude-code-style one-shot. No
 /// engagement, no scope manifest, no FSM. Wires the `mantis` MCP
 /// server so the spawned `claude` has the same tool surface as
@@ -3281,6 +3351,101 @@ fn ensure_mantis_mcp_registered_with_prefetched_helper(
     Ok(())
 }
 
+/// Idempotent. Register `mantis-mcp` as an MCP server in Cursor's
+/// per-user `~/.cursor/mcp.json`. Cursor reads this on startup and
+/// exposes the `mantis` toolset to every project. Existing entries
+/// are overwritten so a stale path from a previous install can't pin
+/// the user to a bad binary. Unrelated `mcpServers` are preserved.
+fn ensure_cursor_mcp_registered(
+    mantis_mcp_path: &std::path::Path,
+    daemon_endpoint: &str,
+) -> Result<()> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dir = std::path::PathBuf::from(format!("{home}/.cursor"));
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join("mcp.json");
+    write_mcp_json_entry(&path, "mantis", mantis_mcp_path, daemon_endpoint, "cursor")
+}
+
+/// Idempotent. Register `mantis-mcp` as an MCP server in Gemini CLI's
+/// per-user `~/.gemini/settings.json`. Mirrors
+/// [`ensure_cursor_mcp_registered`] — same JSON shape, different file.
+fn ensure_gemini_mcp_registered(
+    mantis_mcp_path: &std::path::Path,
+    daemon_endpoint: &str,
+) -> Result<()> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let dir = std::path::PathBuf::from(format!("{home}/.gemini"));
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join("settings.json");
+    write_mcp_json_entry(&path, "mantis", mantis_mcp_path, daemon_endpoint, "gemini")
+}
+
+/// Shared helper for Cursor / Gemini MCP registration. Reads
+/// `mcp_json_path` (if present), insert/replace
+/// `mcpServers.<server_name>` with `{ command, args }`, then write
+/// back with 2-space indent. Corrupt files are backed up to
+/// `<path>.bak.<unix-ts>` and the new entry is written fresh.
+fn write_mcp_json_entry(
+    mcp_json_path: &std::path::Path,
+    server_name: &str,
+    mantis_mcp_path: &std::path::Path,
+    daemon_endpoint: &str,
+    host_label: &str,
+) -> Result<()> {
+    let mut doc = if mcp_json_path.is_file() {
+        let raw = std::fs::read_to_string(mcp_json_path)
+            .with_context(|| format!("read {}", mcp_json_path.display()))?;
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(v) => v,
+            Err(e) => {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let bak = mcp_json_path.with_extension(format!("json.bak.{ts}"));
+                let _ = std::fs::rename(mcp_json_path, &bak);
+                eprintln!(
+                    "[mantis] warn: {} mcp config at {} was corrupt ({e}); backed up to {} and rewriting",
+                    host_label,
+                    mcp_json_path.display(),
+                    bak.display()
+                );
+                serde_json::json!({})
+            }
+        }
+    } else {
+        serde_json::json!({})
+    };
+    if !doc.is_object() {
+        doc = serde_json::json!({});
+    }
+    let obj = doc.as_object_mut().expect("doc is object");
+    let servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if !servers.is_object() {
+        *servers = serde_json::json!({});
+    }
+    let servers = servers.as_object_mut().expect("servers is object");
+    servers.insert(
+        server_name.to_string(),
+        serde_json::json!({
+            "command": mantis_mcp_path.to_string_lossy(),
+            "args": ["--daemon", daemon_endpoint],
+        }),
+    );
+    let pretty = serde_json::to_string_pretty(&doc)
+        .with_context(|| format!("serialize {}", mcp_json_path.display()))?;
+    std::fs::write(mcp_json_path, format!("{pretty}\n"))
+        .with_context(|| format!("write {}", mcp_json_path.display()))?;
+    println!(
+        "[mantis] mcp: registered with {host_label} at {}",
+        mcp_json_path.display()
+    );
+    Ok(())
+}
+
 /// `mantis init` — wire plugin + MCP + daemon in one command. Used
 /// both manually and by the npm shim on first invocation.
 fn handle_init(
@@ -3305,6 +3470,12 @@ fn handle_init(
     } else {
         println!("  workspace: already exists at {}", ws_path.display());
     }
+
+    // One-shot migration: if v0.0.8 left workspace / operator signing
+    // keys in the OS keychain and the new file backend is empty, copy
+    // them across so signatures stay stable across the upgrade. Soft-
+    // skip every branch — a failed migration is never fatal.
+    maybe_migrate_keystore_from_os(&ws_path);
 
     // Detect installed AI-CLI hosts up front so each plugin / mcp step
     // can soft-skip the ones the operator doesn't have. We treat both
@@ -3354,16 +3525,27 @@ fn handle_init(
     if !no_mcp {
         let claude_bin = which_bin("claude");
         let codex_bin = which_bin("codex");
-        if claude_bin.is_none() && codex_bin.is_none() {
+        let cursor_present = which_bin("cursor").is_some()
+            || std::path::PathBuf::from(format!("{home}/.cursor")).is_dir();
+        let gemini_present = which_bin("gemini").is_some()
+            || std::path::PathBuf::from(format!("{home}/.gemini")).is_dir();
+        if claude_bin.is_none() && codex_bin.is_none() && !cursor_present && !gemini_present {
             anyhow::bail!(
-                "no MCP-capable AI CLI detected (neither `claude` nor `codex` on PATH).\n\
-                 Install Claude Code (https://claude.com/claude-code) or Codex CLI, \
-                 then re-run `mantis init`. Use `--no-mcp` to skip MCP registration."
+                "no MCP-capable AI CLI detected (none of `claude`, `codex`, `cursor`, or `gemini`).\n\
+                 Install Claude Code (https://claude.com/claude-code), Codex CLI, Cursor, or \
+                 Gemini CLI, then re-run `mantis init`. Use `--no-mcp` to skip MCP registration."
             );
         }
         if let Some(claude) = claude_bin {
-            ensure_mantis_mcp_registered(&claude, &daemon_endpoint)?;
-            any_host_wired = true;
+            if resolve_mantis_mcp_bin().is_some() {
+                ensure_mantis_mcp_registered(&claude, &daemon_endpoint)?;
+                any_host_wired = true;
+            } else {
+                println!(
+                    "  mcp:     claude found but `mantis-mcp` is not installed — \
+                     skipping claude MCP registration"
+                );
+            }
         } else {
             println!("  mcp:     claude not on PATH — skipping claude MCP registration");
         }
@@ -3379,6 +3561,32 @@ fn handle_init(
             }
         } else {
             println!("  mcp:     codex not on PATH — skipping codex MCP registration");
+        }
+        if cursor_present {
+            if let Some(mcp_bin) = resolve_mantis_mcp_bin() {
+                ensure_cursor_mcp_registered(&mcp_bin, &daemon_endpoint)?;
+                any_host_wired = true;
+            } else {
+                println!(
+                    "  mcp:     cursor detected but `mantis-mcp` is not installed — \
+                     skipping cursor MCP registration"
+                );
+            }
+        } else {
+            println!("  cursor:  not detected, skipping");
+        }
+        if gemini_present {
+            if let Some(mcp_bin) = resolve_mantis_mcp_bin() {
+                ensure_gemini_mcp_registered(&mcp_bin, &daemon_endpoint)?;
+                any_host_wired = true;
+            } else {
+                println!(
+                    "  mcp:     gemini detected but `mantis-mcp` is not installed — \
+                     skipping gemini MCP registration"
+                );
+            }
+        } else {
+            println!("  gemini:  not detected, skipping");
         }
     } else {
         println!("  mcp:     skipped (--no-mcp)");
@@ -3681,6 +3889,104 @@ fn has_any_ai_cli() -> bool {
     ["claude", "codex", "opencode", "gemini"]
         .iter()
         .any(|n| which_bin(n).is_some())
+}
+
+/// One-shot keystore migration from the OS keychain (v0.0.8 default)
+/// to the new file backend (v0.0.9 default). Best-effort and silent on
+/// every failure path:
+///
+///  * if `<ws_path>/keystore/` already has files → skip (already migrated)
+///  * if the file backend is currently selected and the workspace has
+///    not been initialised yet → nothing to migrate, skip
+///  * if `MANTIS_KEYSTORE=keychain` is set → user opted in to the OS
+///    keychain, skip
+///  * else probe `OsKeyStore` for the workspace signing-key and each
+///    operator signing-key recorded under `<ws_path>/operators/`, and
+///    copy any hits across. Original keychain entries are left in place
+///    so the user can clean them up at their own pace.
+fn maybe_migrate_keystore_from_os(ws_path: &std::path::Path) {
+    use mantis_workspace::keystore::{FileKeyStore, KeyStore, OsKeyStore};
+    use mantis_workspace::{operator_keystore_service, workspace_keystore_service};
+
+    if std::env::var("MANTIS_KEYSTORE").as_deref() == Ok("keychain") {
+        return;
+    }
+
+    let file_root = ws_path.join("keystore");
+    let file_has_content = std::fs::read_dir(&file_root)
+        .map(|mut it| it.next().is_some())
+        .unwrap_or(false);
+    if file_has_content {
+        return;
+    }
+
+    let os = OsKeyStore::new();
+    if !os.is_available() {
+        return;
+    }
+
+    // Collect candidate (service, account) probes from on-disk metadata.
+    let mut probes: Vec<(String, &'static str)> = Vec::new();
+
+    // Workspace key: parse the workspace config to learn the ID.
+    let config_path = ws_path.join("workspace.config.toml");
+    if let Ok(raw) = std::fs::read_to_string(&config_path) {
+        // The config is small TOML; pull the `id = "..."` line out
+        // with a basic scan to avoid depending on `toml` here.
+        for line in raw.lines() {
+            if let Some(rest) = line.trim().strip_prefix("id") {
+                let v = rest.trim().trim_start_matches('=').trim();
+                let v = v.trim_matches('"');
+                if !v.is_empty() {
+                    if let Ok(ulid) = v.parse::<ulid::Ulid>() {
+                        probes.push((
+                            workspace_keystore_service(mantis_core::WorkspaceId(ulid)),
+                            "signing-key",
+                        ));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Operator keys: every subdir of `operators/` is named after its ULID.
+    let operators_dir = ws_path.join("operators");
+    if let Ok(read) = std::fs::read_dir(&operators_dir) {
+        for entry in read.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if let Ok(ulid) = name.parse::<ulid::Ulid>() {
+                probes.push((
+                    operator_keystore_service(mantis_core::OperatorId(ulid)),
+                    "signing-key",
+                ));
+            }
+        }
+    }
+
+    if probes.is_empty() {
+        return;
+    }
+
+    let file = FileKeyStore::new(file_root);
+    let mut migrated = 0usize;
+    for (service, account) in probes {
+        match os.get(&service, account) {
+            Ok(bytes) => {
+                if file.put(&service, account, &bytes).is_ok() {
+                    migrated += 1;
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    if migrated > 0 {
+        println!(
+            "[mantis] migrated {migrated} keystore entr{plural} from system keychain → file backend",
+            plural = if migrated == 1 { "y" } else { "ies" }
+        );
+    }
 }
 
 /// Look up an executable on the current `PATH`. Lightweight std-only
@@ -4388,13 +4694,13 @@ fn build_signed_scope_json(
     use mantis_scope::signed::SignedScope;
     use mantis_workspace::keystore::KeyStore;
     use mantis_workspace::{
-        default_workspace_root, operator_keystore_service, Keypair, OsKeyStore, Workspace,
+        default_keystore, default_workspace_root, operator_keystore_service, Keypair, Workspace,
     };
     use ulid::Ulid;
 
     let root = default_workspace_root();
-    let keystore = OsKeyStore::new();
-    let workspace = Workspace::open(&root, &keystore)
+    let keystore = default_keystore(root.as_std_path());
+    let workspace = Workspace::open(&root, &*keystore)
         .context("open workspace (run `mantis workspace init` first)")?;
 
     let operator = workspace
@@ -4407,7 +4713,7 @@ fn build_signed_scope_json(
 
     let operator_secret = keystore
         .get(&operator_keystore_service(operator.id), "signing-key")
-        .context("read operator signing key from OS keystore")?;
+        .context("read operator signing key from keystore")?;
     let secret_arr: [u8; 32] = operator_secret
         .as_slice()
         .try_into()
@@ -4581,8 +4887,8 @@ fn resolve_root(root: Option<Utf8PathBuf>) -> Utf8PathBuf {
 
 fn cmd_workspace_init(root: Option<Utf8PathBuf>) -> Result<()> {
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let ws = Workspace::init(&root, &ks).context("initialize workspace")?;
+    let ks = default_keystore(root.as_std_path());
+    let ws = Workspace::init(&root, &*ks).context("initialize workspace")?;
     println!("Workspace initialized.");
     println!("  root:        {}", ws.root());
     println!("  id:          {}", ws.id());
@@ -4592,8 +4898,8 @@ fn cmd_workspace_init(root: Option<Utf8PathBuf>) -> Result<()> {
 
 fn cmd_workspace_info(root: Option<Utf8PathBuf>) -> Result<()> {
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let ws = Workspace::open(&root, &ks).context("open workspace")?;
+    let ks = default_keystore(root.as_std_path());
+    let ws = Workspace::open(&root, &*ks).context("open workspace")?;
     println!("Workspace:");
     println!("  root:           {}", ws.root());
     println!("  id:             {}", ws.id());
@@ -4606,9 +4912,9 @@ fn cmd_workspace_info(root: Option<Utf8PathBuf>) -> Result<()> {
 
 fn cmd_operator_create(name: &str, root: Option<Utf8PathBuf>) -> Result<()> {
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let ws = Workspace::open(&root, &ks).context("open workspace")?;
-    let profile = ws.create_operator(name, &ks).context("create operator")?;
+    let ks = default_keystore(root.as_std_path());
+    let ws = Workspace::open(&root, &*ks).context("open workspace")?;
+    let profile = ws.create_operator(name, &*ks).context("create operator")?;
     println!("Operator created.");
     println!("  id:          {}", profile.id);
     println!("  name:        {}", profile.name);
@@ -4618,8 +4924,8 @@ fn cmd_operator_create(name: &str, root: Option<Utf8PathBuf>) -> Result<()> {
 
 fn cmd_operator_list(root: Option<Utf8PathBuf>) -> Result<()> {
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let ws = Workspace::open(&root, &ks).context("open workspace")?;
+    let ks = default_keystore(root.as_std_path());
+    let ws = Workspace::open(&root, &*ks).context("open workspace")?;
     let operators = ws.list_operators()?;
     if operators.is_empty() {
         println!("(no operators yet — run `mantis operator create <name>`)");
@@ -4642,9 +4948,9 @@ fn cmd_operator_delete(id_str: &str, root: Option<Utf8PathBuf>) -> Result<()> {
     let operator_id = OperatorId(ulid);
 
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let ws = Workspace::open(&root, &ks).context("open workspace")?;
-    ws.delete_operator(operator_id, &ks)
+    let ks = default_keystore(root.as_std_path());
+    let ws = Workspace::open(&root, &*ks).context("open workspace")?;
+    ws.delete_operator(operator_id, &*ks)
         .context("delete operator")?;
     println!("Operator {operator_id} deleted.");
     Ok(())
@@ -4652,8 +4958,8 @@ fn cmd_operator_delete(id_str: &str, root: Option<Utf8PathBuf>) -> Result<()> {
 
 fn cmd_doctor(root: Option<Utf8PathBuf>, json: bool) -> Result<()> {
     let root = resolve_root(root);
-    let ks = OsKeyStore::new();
-    let report = run_doctor(&root, &ks).context("run doctor")?;
+    let ks = default_keystore(root.as_std_path());
+    let report = run_doctor(&root, &*ks).context("run doctor")?;
     let recon_inv = mantis_recon_tools::ToolInventory::scan();
 
     if json {

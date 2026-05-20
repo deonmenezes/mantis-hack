@@ -120,9 +120,25 @@ impl KeyStore for FileKeyStore {
     fn put(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), KeyStoreError> {
         std::fs::create_dir_all(&self.root)
             .map_err(|e| KeyStoreError::Unavailable(format!("create dir: {e}")))?;
+        // Lock down the keystore directory on Unix so other local users
+        // can't peek at workspace / operator signing keys. Best-effort:
+        // if the chmod fails (rare, e.g. exotic FS) we don't bail out
+        // — the file write would have failed first anyway.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700));
+        }
         let encoded = hex::encode(secret);
-        std::fs::write(self.path(service, account), encoded)
-            .map_err(|e| KeyStoreError::Unavailable(format!("write key file: {e}")))
+        let path = self.path(service, account);
+        std::fs::write(&path, encoded)
+            .map_err(|e| KeyStoreError::Unavailable(format!("write key file: {e}")))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 
     fn get(&self, service: &str, account: &str) -> Result<Vec<u8>, KeyStoreError> {
@@ -197,6 +213,25 @@ impl KeyStore for InMemoryKeyStore {
 
     fn backend_name(&self) -> &'static str {
         "in-memory"
+    }
+}
+
+/// Returns the default keystore for this platform.
+///
+/// Selection (highest to lowest priority):
+///   1. `MANTIS_KEYSTORE=file`     → `FileKeyStore` rooted at `<workspace_root>/keystore/`
+///   2. `MANTIS_KEYSTORE=keychain` → `OsKeyStore` (macOS Keychain / Linux Secret Service / etc.)
+///   3. Default                    → `FileKeyStore` (no keychain prompts)
+///
+/// `workspace_root` is typically `default_workspace_root()` (i.e. `~/.mantis`).
+pub fn default_keystore(workspace_root: &std::path::Path) -> Box<dyn KeyStore> {
+    match std::env::var("MANTIS_KEYSTORE").as_deref() {
+        Ok("keychain") => Box::new(OsKeyStore::new()),
+        Ok("file") | Err(_) => Box::new(FileKeyStore::new(workspace_root.join("keystore"))),
+        Ok(other) => {
+            eprintln!("[mantis] warn: unknown MANTIS_KEYSTORE='{other}', using file backend");
+            Box::new(FileKeyStore::new(workspace_root.join("keystore")))
+        }
     }
 }
 

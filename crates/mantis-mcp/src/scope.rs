@@ -21,7 +21,7 @@ use mantis_scope::port_range::PortMatcher;
 use mantis_scope::signed::SignedScope;
 use mantis_workspace::keystore::KeyStore;
 use mantis_workspace::{
-    default_workspace_root, operator_keystore_service, Keypair, OsKeyStore, Workspace,
+    default_keystore, default_workspace_root, operator_keystore_service, Keypair, Workspace,
 };
 use ulid::Ulid;
 
@@ -31,8 +31,8 @@ pub fn build_signed_scope_json(
     budget_seconds: u32,
 ) -> Result<String> {
     let root = default_workspace_root();
-    let keystore = OsKeyStore::new();
-    let workspace = Workspace::open(&root, &keystore)
+    let keystore = default_keystore(root.as_std_path());
+    let workspace = Workspace::open(&root, &*keystore)
         .context("open workspace (run `mantis workspace init` first)")?;
 
     let operator = workspace
@@ -43,7 +43,7 @@ pub fn build_signed_scope_json(
 
     let operator_secret = keystore
         .get(&operator_keystore_service(operator.id), "signing-key")
-        .context("read operator signing key from OS keystore")?;
+        .context("read operator signing key from keystore")?;
     let secret_arr: [u8; 32] = operator_secret
         .as_slice()
         .try_into()
