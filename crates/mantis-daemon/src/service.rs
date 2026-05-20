@@ -42,6 +42,10 @@ use mantis_proto::v1::{
 };
 use mantis_scanner_http::{HttpProbeScanner, ProbeConfig, ProbeTarget};
 use mantis_scope::{BudgetTracker, ScopeEvaluator, ScopeManifest, SignedScope};
+use mantis_web_ui::state::{
+    EngagementView as WebEngagementView, Event as WebEvent, EventChannel as WebEventChannel,
+    SharedState as WebSharedState,
+};
 use mantis_workspace::Workspace;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -122,12 +126,37 @@ pub(crate) struct EngagementServiceImpl {
     runtime: RwLock<HashMap<EngagementId, EngagementRuntime>>,
     posteriors: Arc<Posteriors>,
     catalog: Arc<Vec<Box<dyn Primitive>>>,
+    /// Browser-facing view of the engagement set. Shared with the
+    /// `mantis-web-ui` HTTP server. `None` when no web UI is wired
+    /// (tests, embedded uses).
+    web_state: Option<WebSharedState>,
+    /// Broadcast channel that feeds the SSE event stream. `None`
+    /// when no web UI is wired.
+    web_events: Option<WebEventChannel>,
 }
 
 impl EngagementServiceImpl {
+    /// Convenience constructor without the web UI hooks. Used by
+    /// tests and by callers that do not need browser visibility.
+    #[cfg(test)]
     pub(crate) fn new(
         workspace: Arc<Workspace>,
         event_store: Arc<EventStore>,
+    ) -> Result<Self, anyhow::Error> {
+        Self::new_with_web(workspace, event_store, None, None)
+    }
+
+    /// Variant that also wires the daemon's lifecycle mutations into
+    /// the [`mantis_web_ui`] SharedState + EventChannel. When both
+    /// are `Some`, every `create` / `authorize` / `start` / `pause`
+    /// / `resume` / `completed` transition is mirrored as an
+    /// `EngagementUpserted` event and into the snapshot the browser
+    /// fetches on first paint.
+    pub(crate) fn new_with_web(
+        workspace: Arc<Workspace>,
+        event_store: Arc<EventStore>,
+        web_state: Option<WebSharedState>,
+        web_events: Option<WebEventChannel>,
     ) -> Result<Self, anyhow::Error> {
         let mut state = HashMap::new();
         let mut fsm = HashMap::new();
@@ -139,6 +168,14 @@ impl EngagementServiceImpl {
                 fsm.insert(id, derive_fsm(id, target, &events));
             }
         }
+        // Hydrate the WebState snapshot so the very first /api/state
+        // hit shows engagements that already existed in the merkle
+        // log before the daemon booted.
+        if let Some(ws) = &web_state {
+            if let Ok(mut guard) = ws.write() {
+                guard.engagements = state.values().map(web_view_of).collect();
+            }
+        }
         Ok(Self {
             workspace,
             event_store,
@@ -147,12 +184,56 @@ impl EngagementServiceImpl {
             runtime: RwLock::new(HashMap::new()),
             posteriors: Arc::new(Posteriors::new()),
             catalog: Arc::new(build_catalog()),
+            web_state,
+            web_events,
         })
     }
 
     fn workspace_signer(&self) -> &dyn Signer {
         self.workspace.as_ref()
     }
+
+    /// Update the browser-facing snapshot and broadcast an
+    /// `EngagementUpserted` event. No-op if the daemon was booted
+    /// without a web UI (the `Option`s are `None`).
+    fn notify_engagement_changed(&self, row: &EngagementRow) {
+        let view = web_view_of(row);
+        if let Some(ws) = &self.web_state {
+            if let Ok(mut guard) = ws.write() {
+                if let Some(existing) =
+                    guard.engagements.iter_mut().find(|x| x.id == view.id)
+                {
+                    *existing = view.clone();
+                } else {
+                    guard.engagements.push(view.clone());
+                }
+            }
+        }
+        if let Some(ch) = &self.web_events {
+            ch.send(WebEvent::EngagementUpserted(view));
+        }
+    }
+}
+
+fn web_view_of(row: &EngagementRow) -> WebEngagementView {
+    WebEngagementView {
+        id: row.id.to_string(),
+        name: row.name.clone(),
+        state: state_to_str(row.state),
+        events: row.event_count,
+    }
+}
+
+fn state_to_str(s: mantis_core::EngagementState) -> String {
+    match s {
+        mantis_core::EngagementState::Draft => "draft",
+        mantis_core::EngagementState::Authorized => "authorized",
+        mantis_core::EngagementState::Active => "active",
+        mantis_core::EngagementState::Paused => "paused",
+        mantis_core::EngagementState::Completed => "completed",
+        mantis_core::EngagementState::Archived => "archived",
+    }
+    .to_string()
 }
 
 /// Build a SessionState by folding every PhaseTransitioned event
@@ -298,6 +379,7 @@ impl Engagement for EngagementServiceImpl {
             fingerprint: None,
         };
         let info = row.to_proto();
+        self.notify_engagement_changed(&row);
         self.state.write().await.insert(id, row);
         // Seed an FSM state for this engagement; it starts in RECON
         // with no surfaces and pending auth.
@@ -385,6 +467,7 @@ impl Engagement for EngagementServiceImpl {
         info!(engagement_id = %id, operator = %authorizer, "engagement authorized");
         let state = self.state.read().await;
         let row = state.get(&id).expect("just-inserted row");
+        self.notify_engagement_changed(row);
         Ok(Response::new(row.to_proto()))
     }
 
@@ -1047,7 +1130,13 @@ impl EngagementServiceImpl {
         row.state = next;
         row.event_count += 1;
         info!(engagement_id = %id, ?next, "engagement transitioned");
-        Ok(Response::new(row.to_proto()))
+        let proto = row.to_proto();
+        // Capture the row by value so the broadcast happens after the
+        // write lock drops.
+        let row_snapshot = row.clone();
+        drop(state);
+        self.notify_engagement_changed(&row_snapshot);
+        Ok(Response::new(proto))
     }
 }
 

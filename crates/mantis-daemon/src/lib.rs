@@ -63,8 +63,19 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
         }
     })?);
 
-    let service = EngagementServiceImpl::new(workspace.clone(), event_store.clone())
-        .context("construct engagement service")?;
+    // Create the browser-facing state + event channel before
+    // constructing the service so the service can mirror its
+    // lifecycle mutations into them.
+    let web_state = mantis_web_ui::state::new_shared();
+    let web_events = mantis_web_ui::state::EventChannel::new(256);
+
+    let service = EngagementServiceImpl::new_with_web(
+        workspace.clone(),
+        event_store.clone(),
+        Some(web_state.clone()),
+        Some(web_events.clone()),
+    )
+    .context("construct engagement service")?;
 
     let listener = TcpListener::bind(config.bind).await.context("bind tcp")?;
     let bound = listener.local_addr().context("local_addr")?;
@@ -80,9 +91,7 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
     let web_ui_bind = config
         .web_ui_bind
         .unwrap_or_else(|| DEFAULT_WEB_UI_BIND.parse().expect("static addr"));
-    let web_state = mantis_web_ui::state::new_shared();
-    let web_events = mantis_web_ui::state::EventChannel::new(256);
-    match mantis_web_ui::serve(web_ui_bind, web_state.clone(), web_events.clone()).await {
+    match mantis_web_ui::serve(web_ui_bind, web_state, web_events).await {
         Ok(handle) => {
             std::fs::write(root.join("web-ui.endpoint"), format!("http://{}", handle.addr))
                 .context("write web-ui.endpoint")?;
