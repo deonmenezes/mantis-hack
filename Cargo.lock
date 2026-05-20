@@ -2139,7 +2139,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-auth"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "camino",
@@ -2153,7 +2153,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-auth-differential"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "hex",
@@ -2169,7 +2169,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-benches"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "camino",
  "criterion",
@@ -2189,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-chain"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -2197,7 +2197,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-claim"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "hex",
@@ -2215,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-cli"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "camino",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-core"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-crawler"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-crawler-dynamic"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-crawler",
  "thiserror 1.0.69",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-daemon"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2294,6 +2294,7 @@ dependencies = [
  "mantis-scanner-http",
  "mantis-scope",
  "mantis-tiered-exec",
+ "mantis-web-ui",
  "mantis-workspace",
  "prost",
  "reqwest",
@@ -2309,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-egress"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "camino",
  "httparse",
@@ -2326,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-event-store"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "camino",
@@ -2346,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-fsm"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "hex",
@@ -2358,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-fuzzer"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "rand 0.8.6",
  "serde",
@@ -2366,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-gateway"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "mantis-core",
@@ -2380,7 +2381,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-hibernation"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "camino",
  "mantis-core",
@@ -2393,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-hypothesis"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "mantis-event-store",
@@ -2405,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-k8s"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2414,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-mcp"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2443,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-memory"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "mantis-event-store",
@@ -2453,7 +2454,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-operator-model"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "serde",
@@ -2464,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-orchestrator"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-auth",
  "mantis-auth-differential",
@@ -2483,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-pack"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -2492,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-planner"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "mantis-hypothesis",
@@ -2503,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-playbook"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-event-store",
  "serde",
@@ -2514,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-plugin"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "serde",
@@ -2525,14 +2526,14 @@ dependencies = [
 
 [[package]]
 name = "mantis-posterior"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "mantis-primitive"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "hex",
@@ -2549,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-proto"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "prost",
  "tonic",
@@ -2558,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-recon-tools"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "reqwest",
  "serde",
@@ -2571,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-registry"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "ed25519-dalek",
@@ -2585,7 +2586,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-report"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-claim",
  "mantis-core",
@@ -2596,7 +2597,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-runtime"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "core_affinity",
  "num_cpus",
@@ -2606,7 +2607,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-sandbox"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2620,7 +2621,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-scanner-http"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "camino",
  "mantis-auth",
@@ -2638,7 +2639,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-scheduler"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "serde",
@@ -2648,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-scope"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "ed25519-dalek",
  "glob-match",
@@ -2664,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-signup"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-auth",
  "reqwest",
@@ -2678,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-synthesizer"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "mantis-fuzzer",
@@ -2693,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-tenant"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "camino",
  "mantis-core",
@@ -2705,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-tiered-exec"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "async-trait",
  "mantis-auth",
@@ -2722,7 +2723,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-trajectory"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "mantis-core",
  "mantis-event-store",
@@ -2733,14 +2734,14 @@ dependencies = [
 
 [[package]]
 name = "mantis-tui"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "mantis-tui-ratatui"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -2755,14 +2756,14 @@ dependencies = [
 
 [[package]]
 name = "mantis-tuner"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "mantis-verify"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2775,7 +2776,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-video"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "tempfile",
  "thiserror 1.0.69",
@@ -2784,7 +2785,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-web-ui"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "httparse",
  "serde",
@@ -2795,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "mantis-workspace"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "blake3",
  "camino",

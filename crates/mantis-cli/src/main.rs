@@ -764,6 +764,7 @@ fn main() -> Result<()> {
             mantis_daemon::run(mantis_daemon::DaemonConfig {
                 bind,
                 workspace_root: root,
+                web_ui_bind: None,
             })
             .await
         }),

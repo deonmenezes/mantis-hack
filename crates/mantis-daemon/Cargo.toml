@@ -31,6 +31,7 @@ mantis-report = { workspace = true }
 mantis-scanner-http = { workspace = true }
 mantis-scope = { workspace = true }
 mantis-tiered-exec = { workspace = true }
+mantis-web-ui = { workspace = true }
 mantis-workspace = { workspace = true }
 
 reqwest = { workspace = true }

@@ -1,0 +1,7 @@
+node_modules
+dist
+.DS_Store
+*.log
+tsconfig.tsbuildinfo
+# pnpm keeps its CAS under .pnpm-store but we never commit it.
+.pnpm-store

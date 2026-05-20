@@ -27,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
     run(DaemonConfig {
         bind: cli.bind,
         workspace_root: cli.workspace_root,
+        web_ui_bind: None,
     })
     .await
 }

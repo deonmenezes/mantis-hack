@@ -27,11 +27,15 @@ use tonic::transport::Server;
 use crate::service::EngagementServiceImpl;
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:50451";
+pub const DEFAULT_WEB_UI_BIND: &str = "127.0.0.1:50452";
 
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
     pub bind: SocketAddr,
     pub workspace_root: Option<Utf8PathBuf>,
+    /// Bind address for the web UI HTTP server. None disables it.
+    /// Defaults to [`DEFAULT_WEB_UI_BIND`] (loopback only).
+    pub web_ui_bind: Option<SocketAddr>,
 }
 
 impl DaemonConfig {
@@ -59,14 +63,44 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
         }
     })?);
 
-    let service = EngagementServiceImpl::new(workspace.clone(), event_store.clone())
-        .context("construct engagement service")?;
+    // Create the browser-facing state + event channel before
+    // constructing the service so the service can mirror its
+    // lifecycle mutations into them.
+    let web_state = mantis_web_ui::state::new_shared();
+    let web_events = mantis_web_ui::state::EventChannel::new(256);
+
+    let service = EngagementServiceImpl::new_with_web(
+        workspace.clone(),
+        event_store.clone(),
+        Some(web_state.clone()),
+        Some(web_events.clone()),
+    )
+    .context("construct engagement service")?;
 
     let listener = TcpListener::bind(config.bind).await.context("bind tcp")?;
     let bound = listener.local_addr().context("local_addr")?;
 
     let endpoint_path = root.join("daemon.endpoint");
     std::fs::write(&endpoint_path, format!("http://{bound}")).context("write daemon.endpoint")?;
+
+    // Boot the web UI on a separate loopback port. The default is
+    // `127.0.0.1:50452` so a browser at http://localhost:50452 shows
+    // the live engagement viewer. Failure to bind is non-fatal — the
+    // gRPC daemon keeps serving — but is logged loudly so operators
+    // notice.
+    let web_ui_bind = config
+        .web_ui_bind
+        .unwrap_or_else(|| DEFAULT_WEB_UI_BIND.parse().expect("static addr"));
+    match mantis_web_ui::serve(web_ui_bind, web_state, web_events).await {
+        Ok(handle) => {
+            std::fs::write(root.join("web-ui.endpoint"), format!("http://{}", handle.addr))
+                .context("write web-ui.endpoint")?;
+            tracing::info!(bind = %handle.addr, "mantis web UI listening");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, bind = %web_ui_bind, "web UI failed to bind — continuing without it");
+        }
+    }
 
     tracing::info!(
         workspace_root = %root,
