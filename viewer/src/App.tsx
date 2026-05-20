@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { fetchState, subscribeEvents, type WebState, type WireEvent } from "./api";
-import EngagementList from "./components/EngagementList";
-import ClaimsTable from "./components/ClaimsTable";
-import EventStream from "./components/EventStream";
+import { fetchState, subscribeEvents, type WebState, type WireEvent } from "@/api";
+import EngagementList from "@/components/EngagementList";
+import ClaimsTable from "@/components/ClaimsTable";
+import EventStream from "@/components/EventStream";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Connection = "connecting" | "live" | "down";
 
@@ -36,18 +37,20 @@ export default function App() {
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col bg-background text-foreground">
       <Header connection={connection} engagementCount={state?.engagements.length ?? 0} />
-      <main className="flex-1 grid grid-cols-12 gap-px bg-ink-700 overflow-hidden">
-        <section className="col-span-4 bg-ink-900 overflow-y-auto p-4">
-          <SectionTitle>Engagements</SectionTitle>
-          <EngagementList engagements={state?.engagements ?? []} />
-          <div className="mt-8">
-            <SectionTitle>Findings</SectionTitle>
-            <ClaimsTable claims={state?.claims ?? []} />
-          </div>
-        </section>
-        <section className="col-span-8 bg-ink-900 overflow-hidden flex flex-col">
+      <main className="flex-1 grid grid-cols-12 gap-px bg-border overflow-hidden">
+        <aside className="col-span-4 bg-background overflow-hidden flex flex-col">
+          <ScrollArea className="flex-1 px-4 py-4">
+            <SectionTitle>Engagements</SectionTitle>
+            <EngagementList engagements={state?.engagements ?? []} />
+            <div className="mt-8">
+              <SectionTitle>Findings</SectionTitle>
+              <ClaimsTable claims={state?.claims ?? []} />
+            </div>
+          </ScrollArea>
+        </aside>
+        <section className="col-span-8 bg-background overflow-hidden flex flex-col">
           <div className="px-4 pt-4">
             <SectionTitle>Live event stream</SectionTitle>
           </div>
@@ -95,7 +98,7 @@ function applyEvent(
       case "McTreeUpdated":
         return { ...prev, mcts_tree: { root: e.root, iterations: e.iterations } };
       case "LogLine":
-        return prev; // log handled separately
+        return prev;
     }
   });
 
@@ -115,22 +118,26 @@ function Header({
   connection: Connection;
   engagementCount: number;
 }) {
-  const dot =
+  const dotClass =
     connection === "live"
-      ? "bg-accent shadow-[0_0_8px_var(--tw-shadow-color)] shadow-accent"
+      ? "bg-brand shadow-[0_0_8px_var(--tw-shadow-color)] shadow-brand"
       : connection === "connecting"
       ? "bg-yellow-400"
-      : "bg-red-500";
+      : "bg-destructive";
   return (
-    <header className="flex items-center justify-between border-b border-ink-700 px-6 py-3">
+    <header className="flex items-center justify-between border-b px-6 py-3">
       <div className="flex items-center gap-3">
-        <span className="font-mono text-accent text-lg">mantis</span>
-        <span className="text-zinc-500 text-xs">viewer</span>
+        <span className="font-mono text-brand text-lg font-semibold tracking-tight">
+          mantis
+        </span>
+        <span className="text-muted-foreground text-xs">viewer</span>
       </div>
-      <div className="flex items-center gap-6 text-xs text-zinc-400">
-        <span className="font-mono">{engagementCount} engagement{engagementCount === 1 ? "" : "s"}</span>
+      <div className="flex items-center gap-6 text-xs text-muted-foreground">
+        <span className="font-mono">
+          {engagementCount} engagement{engagementCount === 1 ? "" : "s"}
+        </span>
         <span className="flex items-center gap-2">
-          <span className={`inline-block w-2 h-2 rounded-full ${dot}`} />
+          <span className={`inline-block w-2 h-2 rounded-full ${dotClass}`} />
           <span>
             {connection === "live"
               ? "daemon: live"
@@ -146,7 +153,7 @@ function Header({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="text-[10px] uppercase tracking-widest text-zinc-500 mb-3 font-mono">
+    <h2 className="text-[10px] uppercase tracking-widest text-muted-foreground mb-3 font-mono">
       {children}
     </h2>
   );
