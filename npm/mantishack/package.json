@@ -1,6 +1,6 @@
 {
   "name": "mantishack",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Mantis — offensive-security daemon for AUTHORIZED security testing only (use against systems you own or have explicit written authorization to test). 7-phase FSM (RECON → AUTH → HUNT → CHAIN → VERIFY → GRADE → REPORT), parallel hunter sub-agents, cryptographic scope enforcement, BLAKE3/Ed25519 Merkle event logs.",
   "keywords": [
     "security",
@@ -33,9 +33,9 @@
     "node": ">=14"
   },
   "optionalDependencies": {
-    "@deonmenezes/mantis-cli-darwin-arm64": "0.0.7",
-    "@deonmenezes/mantis-cli-darwin-x64": "0.0.7",
-    "@deonmenezes/mantis-cli-linux-x64": "0.0.7",
-    "@deonmenezes/mantis-cli-linux-arm64": "0.0.7"
+    "@deonmenezes/mantis-cli-darwin-arm64": "0.0.8",
+    "@deonmenezes/mantis-cli-darwin-x64": "0.0.8",
+    "@deonmenezes/mantis-cli-linux-x64": "0.0.8",
+    "@deonmenezes/mantis-cli-linux-arm64": "0.0.8"
   }
 }

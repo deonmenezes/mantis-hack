@@ -1,6 +1,6 @@
 {
   "name": "mantis-cli",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Alias for `mantishack` — installs the Mantis offensive-security daemon CLI (mantis, mantis-daemon, mantis-mcp). AUTHORIZED security testing only. See https://github.com/deonmenezes/mantishack.",
   "keywords": [
     "security",
@@ -29,6 +29,6 @@
     "node": ">=14"
   },
   "dependencies": {
-    "mantishack": "0.0.7"
+    "mantishack": "0.0.8"
   }
 }
