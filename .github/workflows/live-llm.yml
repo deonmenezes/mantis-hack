@@ -26,6 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build deps (libdbus for keyring)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Skip if no secret
         id: gate
@@ -54,6 +56,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build deps (libdbus for keyring)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - name: Skip if no secret
         id: gate
